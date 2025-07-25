@@ -1,0 +1,18 @@
+# Core Streamlit and data processing
+streamlit>=1.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# API requests and authentication
+requests>=2.31.0
+boto3>=1.28.0
+botocore>=1.31.0
+
+# Database (Supabase)
+supabase>=2.0.0
+
+# Environment variables (for development)
+python-dotenv>=1.0.0
+
+# Date and time handling
+datetime
