@@ -1,15 +1,12 @@
 [theme]
 # Primary accent color for interactive elements - Code8 brand orange/red
-primaryColor = "#FF6B35"
+primaryColor = "#e2c171"
 
 # Background color for the main content area - Dark professional
-backgroundColor = "#0E1117"
+backgroundColor = "#e1e1e1"
 
 # Background color used for the sidebar and most interactive widgets - Darker gray
-secondaryBackgroundColor = "#1E2124"
+secondaryBackgroundColor = "#ccccccff"
 
 # Color used for almost all text - Clean white
-textColor = "#FFFFFF"
-
-[client]
-toolbarMode = "minimal"
+textColor = "#0E1117"
