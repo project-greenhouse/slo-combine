@@ -3,6 +3,19 @@ import pandas as pd
 from datetime import datetime
 import hashlib
 
+#-----Gogglesheets Connection-----
+# My Gsheets connection
+def GetGsheet(sheet_name: str=None):
+    """
+    Creates a connection object for Google Sheets.
+    Returns:
+        GSheetsConnection: A connection object to interact with Google Sheets.
+    """
+    url = st.secrets["SHEET_URL"]
+    df = pd.read_csv(f"{url}{sheet_name}")
+    return df
+
+
 # --- Store Uploaded CSV Data with Named Caching ---
 """
 This function stores the uploaded CSV data in Streamlit session state with a user-defined name.
