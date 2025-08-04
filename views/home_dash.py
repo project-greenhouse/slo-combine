@@ -18,8 +18,9 @@ import views.vert_jump_data as vert_jump
 selected_name = st.session_state.get("selected_name", None)
 
 # Report Header
+logo_url = st.secrets["SUPABASE_LOGO_URL"]
 headerLogo, headerTitle = st.columns((1, 3))
-headerLogo.image("assets/SLO-CC-TRANS.png", use_container_width=True)
+headerLogo.image(logo_url, use_container_width=True)
 headerTitle.markdown(
     "<h1 style='text-align: center;'>San Luis Obispo County Combine 2025</h1>"
     "<br/><h1 style='text-align: center;'>Code 8 Athlete Report</h1>",
