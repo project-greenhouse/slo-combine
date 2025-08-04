@@ -4,6 +4,14 @@ from streamlit_quill import st_quill
 import functions.data as db
 from functions.export_utils import generate_report_html, convert_html_to_pdf, convert_html_to_png
 from functions.func_summary import save_athlete_summary, get_athlete_summary, delete_athlete_summary
+import streamlit.components.v1 as components
+
+favicon_url = st.secrets.get("SUPABASE_FAVICON_URL", "assets/favicon.ico")
+
+components.html(
+    f"""<link rel="icon" href="{favicon_url}" type="image/x-icon" />""",
+    height=0,
+)
 
 # --- PAGE SETUP ---
 st.set_page_config(
