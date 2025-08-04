@@ -7,12 +7,9 @@ import functions.viz as viz
 import functions.utility as utility
 import functions.func_valor as val
 from functions.func_summary import get_athlete_summary
-from functions.export_utils import generate_report_html, convert_html_to_pdf, convert_html_to_png
 
 # --- View Modules ---
-import views.swift_data as swift
 import views.valor_data as valor
-import views.vert_jump_data as vert_jump
 
 # --- Retrieve selected athlete from session state ---
 selected_name = st.session_state.get("selected_name", None)
