@@ -5,7 +5,3 @@ backgroundColor = "#FFFFFF"
 secondaryBackgroundColor ="#e4e3e3ff"
 textColor = "#000000"
 font = "sans serif"
-
-[browser]
-gatherUsageStats = false
-favicon = "assets/favicon.ico"
