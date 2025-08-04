@@ -269,10 +269,10 @@ def ScoreChart(score: float, show: bool = True, key: str = None) -> None:
 #------------------------------------------------------------------------------#
 # Hip Hinge Ranges
 HipHingeRanges = pd.DataFrame({
-        "Metric": ["Hip ER (°)", "Hip Ext. (°)", "Hip Flex. (°)", "Hip IR (°)",  "Knee Flex. (°)", "Shin Angle (°)", "Torso Ext. (°)"],
-        "Min": [0, 0, 70, 0, 15, 0, 0],
-        "Max": [10, 5, 110, 180, 40, 10, 20],
-        "Header": ["Hip ER (0°-10°)", "Hip Ext. (0°-5°)", "Hip Flex. (70°-110°)", "Hip IR (0°-180°)", "Knee Flex. (15°-40°)", "Shin Angle (0°-10°)", "Torso Ext. (0°-20°)"]
+        "Metric": ["Hip ER (°)",  "Hip Flex. (°)", "Knee Flex. (°)", "Shin Angle (°)", "Torso Ext. (°)"],
+        "Min": [0, 70, 15, 0, 0],
+        "Max": [10, 110, 40, 10, 20],
+        "Header": ["Hip ER (0°-10°)", "Hip Flex. (70°-110°)", "Knee Flex. (15°-40°)", "Shin Angle (0°-10°)", "Torso Ext. (0°-20°)"]
         })
 
 # Shoulder Ranges

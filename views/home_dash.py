@@ -16,13 +16,9 @@ selected_name = st.session_state.get("selected_name", None)
 
 # Report Header
 logo_url = st.secrets["SUPABASE_LOGO_URL"]
-headerLogo, headerTitle = st.columns((1, 3))
-headerLogo.image(logo_url, use_container_width=True)
-headerTitle.markdown(
-    "<h1 style='text-align: center;'>San Luis Obispo County Combine 2025</h1>"
-    "<br/><h1 style='text-align: center;'>Code 8 Athlete Report</h1>",
-    unsafe_allow_html=True
-)
+_,headerLogo, headerTitle = st.columns((0.5,2, 3))
+headerLogo.image(logo_url, width=125, use_container_width=False)
+headerTitle.title(f"Code 8 Athlete Report")
 
 # --- Home Page Content ---
 
@@ -242,7 +238,9 @@ _, hipTab, _ = st.columns([0.2, 1, 0.2], gap="small", border=False)
 with hipTab:
     if selected_name:
         try:
-            val.valorDisplayTables(valor.HipHinge)
+            # Filter rows from Metric column ="Hip ER (°)",  "Hip Flex. (°)", "Knee Flex. (°)", "Shin Angle (°)", "Torso Ext. (°)"
+            hingeData = valor.HipHinge[valor.HipHinge['Metric'].isin(["Hip ER (°)", "Hip Flex. (°)", "Knee Flex. (°)", "Shin Angle (°)", "Torso Ext. (°)"])]
+            val.valorDisplayTables(hingeData)
         except:
             st.info("Detailed movement data tables not available for this athlete.")
 
@@ -458,7 +456,7 @@ with broadCol:
         st.metric("Elite % Rank", int(BroadJumpData['ext_perc_broad'].max().round(0)), delta=None)
 
 #-----------------------------------------------------#
-fpTab, mrTab = st.columns([1, 1], gap="small", border=False)
+_,fpTab, mrTab,_ = st.columns([0.5,1,1, 0.5], gap="medium", border=False)
 #----- Force Plate Tables -----#
 with fpTab:
     # Force Plate Tables
