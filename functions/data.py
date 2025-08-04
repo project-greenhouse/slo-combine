@@ -1,7 +1,9 @@
 import pandas as pd
 import streamlit as st
+from functions.db_client import GetSupaTableCached
 from hdforce import AuthManager, GetTests, GetAthletes
 from functions.func_swift import ProAgilityData, Sprint40Data, VertJumpData, BroadJumpData
+from functions.func_player_info import AthleteSignUpData
 from functions.func_valor import get_jwt_token, ValorAthletes
 
 
@@ -10,8 +12,32 @@ from functions.func_valor import get_jwt_token, ValorAthletes
 AuthManager(authMethod="manual", refreshToken=st.secrets["HD_TOKEN"])
 
 # Authnentication for Valor -----
-valorToken = get_jwt_token()
+ValorTokenDF = get_jwt_token()
+if not ValorTokenDF.empty:
+    valorToken = ValorTokenDF['id_token'].values[0]
+    valorAccessToken = ValorTokenDF['access_token'].values[0]
 
+##-----Get Supabase Tables-----
+#  Force Plate Percentiles-----
+try:
+    ForcePlatePercentiles = pd.DataFrame(GetSupaTableCached("ForcePlatePercentiles"))
+except Exception as e:
+    st.error(f"Failed to load Force Plate Percentiles table: {e}")
+    ForcePlatePercentiles = pd.DataFrame()
+
+# Combine Data Percentiles -----
+try:
+    CombinePercentiles = pd.DataFrame(GetSupaTableCached("CombinePercentiles"))
+except Exception as e:
+    st.error(f"Failed to load Combine Percentiles table: {e}")
+    CombinePercentiles = pd.DataFrame()
+
+# Athlete Sign Up Data -----
+try:
+    dfAthleteSignUp = AthleteSignUpData()
+except Exception as e:
+    st.error(f"Failed to load athlete sign up worksheet: {e}")
+    raise
 #-----
 ## Pro Agility CSV Data
 try:
@@ -92,6 +118,7 @@ def rosterCheck():
     })
     
     return roster_df
+
 #-----Clean Roster-----
 # Get single athlete list from SprintAthletes, HawkinAthletes, ProAgilAthletes, VerticalJumpAthletes, and BroadJumpAthletes with no duplicates
 def clean_roster():
@@ -130,6 +157,24 @@ def clean_roster():
 
 #----------------------------------------------------------------------------#
 
+#-----Athlete Info Functions-----
+
+# Athlete Info Data -----
+def AthleteInfoData(athlete: str=None, athlete_data=dfAthleteSignUp):
+    """
+    Fetches Athlete Info data for a specific athlete.
+    Args:
+        athlete (str): Name of the athlete to filter by.
+        athlete_data (pd.DataFrame): DataFrame containing Athlete Info data.
+    Returns:
+        pd.DataFrame: Filtered DataFrame for the specified athlete.
+    """
+    if athlete and not athlete_data.empty:
+        df = athlete_data[athlete_data["Name"] == athlete]
+        return df
+    return pd.DataFrame()  # Return empty DataFrame if no athlete is selected or data is empty
+#----------------------------------------------------------------------------#
+
 #-----Hawking Data Functions-----
 
 # Get CMJ Tests -----
@@ -155,19 +200,44 @@ def AthleteCMJ(athlete: str, cmj_data = HawkinCMJ()):
         pd.DataFrame: Filtered DataFrame for the specified athlete.
     """
     if athlete and not cmj_data.empty:
-        df = cmj_data[cmj_data["athlete_name"] == athlete]
+        # Function to get external percentile using interpolation
+        def get_external_percentile(value, metric_col):
+            import numpy as np
+            ref_df = ForcePlatePercentiles.dropna(subset=[metric_col, "Percentile"]).sort_values(by=metric_col)
+            if ref_df.empty:
+                return None
+            # Use interpolation to get exact percentile for the athlete's value
+            percentile = np.interp(value, ref_df[metric_col].values, ref_df["Percentile"].values)
+            return percentile
+        
+        # Create DataFrame with all data first to calculate population-based percentiles
         data = pd.DataFrame({
-            "Date-Time": pd.to_datetime(df["timestamp"], unit='s').dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "Test Type": df["segment"],
-            "Jump Height (in)": df["jump_height_m"] * 39.3701,  # Convert meters to inches
-            "mRSI": df["mrsi"],
-            "Peak Rel Prop Power (W/kg)": df["peak_relative_propulsive_power_w_kg"],
-            "Braking Asymmetry": df["lr_braking_impulse_index"].round(0)
+            "Date-Time": pd.to_datetime(cmj_data["timestamp"], unit='s').dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "Test Type": cmj_data["segment"],
+            "Athlete Name": cmj_data["athlete_name"],
+            "Jump Height (in)": cmj_data["jump_height_m"] * 39.3701,  # Convert meters to inches
+            "Jump Height SLO Rank": cmj_data["jump_height_m"].rank(method='average', ascending=True, na_option='keep', pct=True) * 100,
+            "Jump Height Elite Rank": cmj_data["jump_height_m"].apply(lambda x: get_external_percentile(x, "JumpHeight")),
+            "mRSI": cmj_data["mrsi"],
+            "mRSI SLO Rank": cmj_data["mrsi"].rank(method='average', ascending=True, na_option='keep', pct=True) * 100,
+            "mRSI Elite Rank": cmj_data["mrsi"].apply(lambda x: get_external_percentile(x, "mRSI")),
+            "Peak Rel Prop Power (W/kg)": cmj_data["peak_relative_propulsive_power_w_kg"],
+            "Peak Rel Power SLO Rank": cmj_data["peak_relative_propulsive_power_w_kg"].rank(method='average', ascending=True, na_option='keep', pct=True) * 100,
+            "Peak Rel Power Elite Rank": cmj_data["peak_relative_propulsive_power_w_kg"].apply(lambda x: get_external_percentile(x, "PeakRelPropPower")),
+            "Braking Asymmetry": cmj_data["lr_braking_impulse_index"].round(0),
+            "Asymmetry SLO Rank": (1 - cmj_data["lr_braking_impulse_index"].rank(method='average', ascending=False, na_option='keep', pct=True)) * 100,  # Lower asymmetry is better
+            "Asymmetry Elite Rank": cmj_data["lr_braking_impulse_index"].apply(lambda x: get_external_percentile(x, "BrakingAsymm")),
         })
-        return data
+
+        # Now filter for the specific athlete
+        athlete_data = data[data["Athlete Name"] == athlete]
+        
+        # Remove the athlete name column since it's not needed in the output
+        athlete_data = athlete_data.drop(columns=["Athlete Name"])
+        
+        return athlete_data
     else:
-        df = cmj_data
-        return df # Return empty DataFrame if no athlete is selected or data is empty
+        return pd.DataFrame()  # Return empty DataFrame if no athlete is selected or data is empty
 
 # Get MR Tests -----
 @st.cache_data(ttl=3600)  # 3600 seconds = 60 minutes
@@ -208,79 +278,72 @@ def AthleteMR(athlete: str, mr_data = HawkinMR()):
 
 #------Swift Data Functions------
 
-# 40-Yard Sprint -----
+# Define updated versions of the swiftSprint and proAgility functions with percentile logic
+def swiftSprint(data, player_name):
+    external_percentiles = CombinePercentiles
 
-## Individual Sprint Data
-def swiftSprint(data=dfSprint, player_name=None):
-    if player_name:
-        df = data[data["Name"] == player_name].copy()
-    else:
-        return pd.DataFrame()
+    data.columns = data.columns.str.strip()
+    split_time_pivot = data.pivot(index=["Name", "ActivityIdentifier"], columns="Distance", values="Split")
+    total_time_pivot = data.pivot(index=["Name", "ActivityIdentifier"], columns="Distance", values="Total")
+    split_time_pivot.columns = [f"split_time_{int(dist)}yd" for dist in split_time_pivot.columns]
+    total_time_pivot.columns = [f"total_time_{int(dist)}yd" for dist in total_time_pivot.columns]
+    df_all = pd.concat([split_time_pivot, total_time_pivot], axis=1).reset_index()
 
-    # Normalize column names
-    df.columns = df.columns.str.strip()
+    df_all["perc_40yd"] = (1 - df_all["total_time_40yd"].rank(pct=True)) * 100
+    df_all["perc_10yd"] = (1 - df_all["total_time_10yd"].rank(pct=True)) * 100
 
-    # Pivot time and velocity values separately
-    time_pivot = df.pivot(index="ActivityIdentifier", columns="Distance", values="Split")
-    velocity_pivot = df.pivot(index="ActivityIdentifier", columns="Distance", values="Velocity")
+    def get_external_percentile(time_val, col):
+        ref_df = external_percentiles.sort_values(by=col, ascending=True).reset_index(drop=True)
+        match = ref_df[ref_df[col] >= time_val]
+        if match.empty:
+            return 100
+        return match.iloc[0]["Percentile"]
 
-    # Rename columns to reflect split distances
-    time_pivot.columns = [f"time_{int(dist)}yd" for dist in time_pivot.columns]
-    velocity_pivot.columns = [f"velocity_{int(dist)}yd" for dist in velocity_pivot.columns]
-
-    # Combine the pivoted tables
-    df_out = pd.concat([time_pivot, velocity_pivot], axis=1).reset_index()
-
-    df_out.insert(0, "Name", player_name)
-    # Replace 'ActivityIdentifier' with 'Name' for clarity and add "Trial #" by index
-    df_out["Trial"] = df_out.index + 1
-    # Remove 0yd time and velocity columns, and remove activity identifier
-    df_out = df_out.loc[:, ~df_out.columns.str.endswith("_0yd")]
-    df_out = df_out.loc[:, ~df_out.columns.str.contains("ActivityIdentifier")]
-    # Reorder columns to have Name and Trial first
-    df_out = df_out[["Name", "Trial"] + [col for col in df_out.columns if col not in ["Name", "Trial"]]]
-
+    df_out = df_all[df_all["Name"] == player_name].copy()
+    df_out["Trial"] = range(1, len(df_out) + 1)
+    df_out["ext_perc_40yd"] = df_out["total_time_40yd"].apply(lambda x: get_external_percentile(x, "Sprint40"))
+    df_out["ext_perc_10yd"] = df_out["total_time_10yd"].apply(lambda x: get_external_percentile(x, "Split10"))
     return df_out
+
 
 #--------------------------------------#
 
 # Pro Agility -----
 
 ## Individual Pro Agility Data
-def proAgility(data=dfProAgility, player_name=None):
-    if player_name:
-        df = data[data["Name"] == player_name].copy()
-    else:
+def proAgility(data, player_name):
+    external_percentiles = CombinePercentiles
+
+    data.columns = data.columns.str.strip()
+    df = data[data["Name"] == player_name].copy()
+    
+    # Check if the player exists in the data
+    if df.empty:
         return pd.DataFrame()
-
-    # Normalize column names
-    df.columns = df.columns.str.strip()
-
-    # Pivot split Time and Velocity
-    time_pivot = df.pivot(index="ActivityIdentifier", columns="Distance", values="Split")
-    velocity_pivot = df.pivot(index="ActivityIdentifier", columns="Distance", values="Velocity")
-
-    # Rename columns
-    time_pivot.columns = [f"time_{int(s)}yd" for s in time_pivot.columns]
-    velocity_pivot.columns = [f"velocity_{int(s)}yd" for s in velocity_pivot.columns]
-
-    # Combine both
-    df_out = pd.concat([time_pivot, velocity_pivot], axis=1)
-
-    # Add total time from 20yd split (or rename for clarity)
-    if "time_20yd" in df_out.columns:
-        df_out = df_out.rename(columns={"time_20yd": "total_time"})
-
-    df_out = df_out.reset_index()
+    
+    split_time_pivot = df.pivot(index="ActivityIdentifier", columns="Distance", values="Split")
+    total_time_pivot = df.pivot(index="ActivityIdentifier", columns="Distance", values="Total")
+    split_time_pivot.columns = [f"split_time_{int(s)}yd" for s in split_time_pivot.columns]
+    total_time_pivot.columns = [f"total_time_{int(s)}yd" for s in total_time_pivot.columns]
+    df_out = pd.concat([total_time_pivot, split_time_pivot], axis=1)
+    df_out["5_0_5_time"] = df_out["total_time_20yd"] - df_out["total_time_10yd"]
+    df_out = df_out.rename(columns={"total_time_20yd": "total_time"}).reset_index()
     df_out.insert(0, "Name", player_name)
-    # Replace 'ActivityIdentifier' with 'Name' for clarity and add "Trial #" by index
     df_out["Trial"] = df_out.index + 1
-    # Remove 0yd time and velocity columns, and remove activity identifier
-    df_out = df_out.loc[:, ~df_out.columns.str.contains("0yd")]
-    df_out = df_out.loc[:, ~df_out.columns.str.contains("ActivityIdentifier")]
-    # Reorder columns to have Name and Trial first
-    df_out = df_out[["Name", "Trial"] + [col for col in df_out.columns if col not in ["Name", "Trial"]]]
 
+    # Only calculate percentiles if we have the total_time column
+    if "total_time" in df_out.columns:
+        df_out["perc_proAgility"] = (1 - df_out["total_time"].rank(pct=True)) * 100
+        
+        def get_external_percentile(time_val):
+            import numpy as np
+            ref_df = external_percentiles.dropna(subset=["ProAgility", "Percentile"]).sort_values(by="ProAgility")
+            # Use interpolation to get exact percentile for the athlete's time
+            percentile = np.interp(time_val, ref_df["ProAgility"].values, ref_df["Percentile"].values)
+            return percentile
+
+        df_out["ext_perc_proAgility"] = df_out["total_time"].apply(get_external_percentile)
+    
     return df_out
 
 #----------------------------------------------------------------------------#
@@ -288,7 +351,9 @@ def proAgility(data=dfProAgility, player_name=None):
 #-----Vertical Jump Data Functions-----
 
 ## Individual Vertical Jump Data
-def verticalJump(data=dfVerticalJump, player_name=None):
+def verticalJump(player_name=None):
+    data = dfVerticalJump
+    
     if player_name:
         df = data[data["Name"] == player_name].copy()
     else:
@@ -296,15 +361,31 @@ def verticalJump(data=dfVerticalJump, player_name=None):
 
     # Normalize column names
     df.columns = df.columns.str.strip()
+    df_all = df[["Name", "VerticalJump"]].copy()
+    df_all["perc_vert"] = (df_all["VerticalJump"].rank(pct=True)) * 100
 
-    return df
+    external_percentiles = CombinePercentiles
+
+    def get_external_percentile(val, col):
+        ref_df = external_percentiles.sort_values(by=col, ascending=True).reset_index(drop=True)
+        match = ref_df[ref_df[col] >= val]
+        if match.empty:
+            return 100
+        return match.iloc[0]["Percentile"]
+    
+    df_out = df_all[df_all["Name"] == player_name].copy()
+    df_out["ext_perc_vert"] = df_out["VerticalJump"].apply(lambda x: get_external_percentile(x, "VerticalJump"))
+
+    return df_out
 
 #--------------------------------------#
 
 #-----Broad Jump Data Functions-----
 
 ## Individual Broad Jump Data
-def broadJump(data=dfBroadJump, player_name=None):
+def broadJump(player_name=None):
+    data = dfBroadJump
+
     if player_name:
         df = data[data["Name"] == player_name].copy()
     else:
@@ -312,7 +393,21 @@ def broadJump(data=dfBroadJump, player_name=None):
 
     # Normalize column names
     df.columns = df.columns.str.strip()
+    df_all = df[["Name", "BestBroadJump"]].copy()
+    df_all["perc_broad"] = (df_all["BestBroadJump"].rank(pct=True)) * 100
 
-    return df
+    external_percentiles = CombinePercentiles
+
+    def get_external_percentile(val, col):
+        ref_df = external_percentiles.sort_values(by=col, ascending=True).reset_index(drop=True)
+        match = ref_df[ref_df[col] >= val]
+        if match.empty:
+            return 100
+        return match.iloc[0]["Percentile"]
+    
+    df_out = df_all[df_all["Name"] == player_name].copy()
+    df_out["ext_perc_broad"] = df_out["BestBroadJump"].apply(lambda x: get_external_percentile(x, "BroadJump"))
+
+    return df_out
 
 #----------------------------------------------------------------------------#
