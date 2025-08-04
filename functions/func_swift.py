@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 from functions.utility import GetGsheet
 
 
