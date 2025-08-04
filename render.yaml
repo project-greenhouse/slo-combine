@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: slo-combine
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "streamlit run app.py"
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
