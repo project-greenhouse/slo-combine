@@ -475,7 +475,8 @@ with fpTab:
             dfPlatesCMJ.loc[dfPlatesCMJ['Metric'] == 'mRSI', 'Metric'] = 'Reactive Strength Index'
             dfPlatesCMJ.loc[dfPlatesCMJ['Metric'] == 'Peak Rel Prop Power (W/kg)', 'Metric'] = 'Peak Relative Power'
             # If value 'Braking Asymmetry' value is negative append the absolute value of 'Braking Asymmetry' to '% Left', else append the absolute value to '% Right'
-            dfPlatesCMJ.loc[dfPlatesCMJ['Metric'] == 'Braking Asymmetry', 'Value'] = dfPlatesCMJ['Value'].apply(lambda x: f"{int(abs(x))}% Left" if x > 0 else f"{int(abs(x))}% Right")
+            dfPlatesCMJ.loc[dfPlatesCMJ['Metric'] == 'Braking Asymmetry', 'Value'] = str(dfPlatesCMJ['Value'].apply(lambda x: f"{int(abs(x))}% Left" if x > 0 else f"{int(abs(x))}% Right"))
+            dfPlatesCMJ["value"] = dfPlatesCMJ["Value"].astype(str)  # Ensure Value is string for display
             st.dataframe(dfPlatesCMJ, hide_index=True, use_container_width=True)
         except:
             st.info("Force Plate data tables not available for this athlete.")
