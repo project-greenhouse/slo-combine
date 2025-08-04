@@ -441,7 +441,7 @@ def valorDisplayTables(df: pd.DataFrame):
             if row['Metric'] in current_metrics:
                 header_mapping[row['Metric']] = row['Header']
                 print(f"Mapped: {row['Metric']} -> {row['Header']}")
-    elif any(metric in current_metrics for metric in ["Hip ER (°)", "Hip Ext. (°)", "Hip Flex. (°)", "Hip IR (°)", "Knee Flex. (°)", "Torso Ext. (°)"]):
+    elif any(metric in current_metrics for metric in ["Hip ER (°)", "Hip Flex. (°)", "Knee Flex. (°)", "Torso Ext. (°)"]):
         # Use Hip Hinge ranges
         print("Using Hip Hinge ranges")
         for _, row in HipHingeRanges.iterrows():
