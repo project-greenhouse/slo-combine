@@ -495,7 +495,12 @@ token = valorTokenDF['id_token'].values[0]
 valorAthletes = ValorAthletes(token=token)
 
 #----- Retrieve athlete ID from Valor Athletes DataFrame selected_name----- 
-AthleteSelected = valorAthletes[valorAthletes['Name'] == selected_name]
+# Check if athlete exists in Valor data
+if selected_name == "Blake St. Vincent":
+    AthleteSelected = valorAthletes[valorAthletes['Name'] == "Blake St Vincent"]
+else:
+    AthleteSelected = valorAthletes[valorAthletes['Name'] == selected_name]
+
 
 #--- Retrieve Valor Sessions DataFrame ---
 valorSessions = ValorSessions(token=token)
@@ -522,15 +527,30 @@ def athlete_session_ids(AthleteId: str, valorSessions: pd.DataFrame) -> pd.DataF
 #----- Shoulder Data Table -----
 # Extract the athlete ID as a string from the AthleteSelected DataFrame
 if not AthleteSelected.empty:
-    AthleteId = AthleteSelected.iloc[0]['Athlete ID']  # Get the first (and should be only) athlete ID
+    AthleteId = AthleteSelected.iloc[0]['ValorID']  # Get the first (and should be only) athlete ID
     sessionDF = athlete_session_ids(AthleteId=AthleteId, valorSessions=valorSessions)
+
+    #---------------------------------------------------------------------------------------------------#
+    # ----- TABLE SETUP -----
+    #---------------------------------------------------------------------------------------------------#
+
+    # ----- Hip Hinge Data -----
+    HipHinge = ValorHipHinge(token=token, key=sessionDF['hipHinge'].values[0])
+    # ----- Left Shoulder Data -----
+    LeftShoulder = ValorLeftShoulder(token=token, key=sessionDF['leftShoulder'].values[0])
+    # ----- Right Shoulder Data -----
+    RightShoulder = ValorRightShoulder(token=token, key=sessionDF['rightShoulder'].values[0])
+    # ----- Left Ankle Data -----
+    LeftAnkle = ValorLeftAnkle(token=token, key=sessionDF['leftAnkle'].values[0])
+    # ----- Right Ankle Data -----
+    RightAnkle = ValorRightAnkle(token=token, key=sessionDF['rightAnkle'].values[0])
 else:
     st.error("No athlete selected or athlete not found")
     sessionDF = pd.DataFrame()  # Create empty DataFrame to prevent further errors
 
 # Only proceed if we have session data
 if not sessionDF.empty:
-    shoulder_data = pd.concat([sessionDF['leftShoulder'], sessionDF['rightShoulder']], axis=0)
+    shoulder_data = pd.concat([LeftShoulder, RightShoulder], axis=0)
     shoulder_data.reset_index(drop=True, inplace=True)
 
     # Mean score as percentage
@@ -548,10 +568,10 @@ if not sessionDF.empty:
         return None  # or use np.nan if you prefer
 
     # Get scalar values
-    r_shoulder_er = get_avgmax(sessionDF['rightShoulder'], "Shoulder ER (°)")
-    l_shoulder_er = get_avgmax(sessionDF['leftShoulder'], "Shoulder ER (°)")
-    r_shoulder_ir = get_avgmax(sessionDF['rightShoulder'], "Shoulder IR (°)")
-    l_shoulder_ir = get_avgmax(sessionDF['leftShoulder'], "Shoulder IR (°)")
+    r_shoulder_er = get_avgmax(RightShoulder, "Shoulder ER (°)")
+    l_shoulder_er = get_avgmax(LeftShoulder, "Shoulder ER (°)")
+    r_shoulder_ir = get_avgmax(RightShoulder, "Shoulder IR (°)")
+    l_shoulder_ir = get_avgmax(LeftShoulder, "Shoulder IR (°)")
 
     # Handle IR asymmetry
     if r_shoulder_ir is not None and l_shoulder_ir is not None:
@@ -582,7 +602,7 @@ if not sessionDF.empty:
     #---------------------------------------------------------------------------------------------------#
     #----- Ankle Data Table -----
 
-    ankle_data = pd.concat([sessionDF['leftAnkle'], sessionDF['rightAnkle']], axis=0)
+    ankle_data = pd.concat([LeftAnkle, RightAnkle], axis=0)
     ankle_data.reset_index(drop=True, inplace=True)
     # Mean score as percentage
     ankle_score = ankle_data["Score"].mean(skipna=True) * 100
@@ -592,10 +612,10 @@ if not sessionDF.empty:
     ankleSA = ankle_data[ankle_data['Metric'] == 'Shin Angle (°)']
 
     # Get scalar values
-    r_ankle_df = get_avgmax(sessionDF['rightAnkle'], "Ankle DF (°)")
-    l_ankle_df = get_avgmax(sessionDF['leftAnkle'], "Ankle DF (°)")
-    r_ankle_sa = get_avgmax(sessionDF['rightAnkle'], "Shin Angle (°)")
-    l_ankle_sa = get_avgmax(sessionDF['leftAnkle'], "Shin Angle (°)")
+    r_ankle_df = get_avgmax(RightAnkle, "Ankle DF (°)")
+    l_ankle_df = get_avgmax(LeftAnkle, "Ankle DF (°)")
+    r_ankle_sa = get_avgmax(RightAnkle, "Shin Angle (°)")
+    l_ankle_sa = get_avgmax(LeftAnkle, "Shin Angle (°)")
 
     # Dorsiflexion asymmetry
     if r_ankle_df is not None and l_ankle_df is not None:
@@ -626,7 +646,7 @@ if not sessionDF.empty:
     #---------------------------------------------------------------------------------------------------#
     #----- Hip Hinge Data Table -----
 
-    hip_data = sessionDF['hipHinge'].copy()
+    hip_data = HipHinge.copy()
     hip_data.reset_index(drop=True, inplace=True)
     # Mean score as percentage
     hip_score = hip_data["Score"].mean(skipna=True) * 100
@@ -643,37 +663,15 @@ else:
 # ----- PAGE SETUP -----
 #---------------------------------------------------------------------------------------------------#
 
-def ValorPage():
-    with st.container(height=250, border=False):
-        shoulCol, anklCol, hipCol = st.columns([1,1,1], vertical_alignment="bottom", gap="small", border=False)
-        with shoulCol:
-            st.markdown(
-                    # Underlined and centered header
-                    "<h6 style='text-align: center; text-decoration: underline;'>Shoulder</h6>" ,
-                    unsafe_allow_html=True
-                )
-            rad(value=shoulder_score, title= "Shoulder Score")
-        with anklCol:
-            st.markdown(
-                    # Underlined and centered header
-                    "<h6 style='text-align: center; text-decoration: underline;'>Ankle</h6>" ,
-                    unsafe_allow_html=True
-                )
-            rad(value=ankle_score, title= "Ankle Score")
-        with hipCol:
-            st.markdown(
-                    # Underlined and centered header
-                    "<h6 style='text-align: center; text-decoration: underline;'>Hip Hinge</h6>" ,
-                    unsafe_allow_html=True
-                )
-            rad(value=hip_score, title= "Hip Score")
 
-    # Only display tables if we have data
-    if not sessionDF.empty:
-        valorDisplayTables(sessionDF['hipHinge'])  # Fixed typo: was 'hipHine'
-        valorDisplayTables(shoulder_data)
-        valorDisplayTables(ankle_data)
+# Only display tables if we have data
+if not sessionDF.empty:
+    st.dataframe(valorDisplayTables(HipHinge))  # Fixed typo: was 'hipHine'
+    st.dataframe(valorDisplayTables(shoulder_data))
+    st.dataframe(valorDisplayTables(ankle_data))
 
-        print(shoulder_data)
-    else:
-        st.warning("No session data available to display.")
+    #print(shoulder_data)
+else:
+    st.warning("No session data available to display.")
+
+    
