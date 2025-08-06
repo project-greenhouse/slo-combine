@@ -670,8 +670,5 @@ if not sessionDF.empty:
     st.dataframe(valorDisplayTables(shoulder_data))
     st.dataframe(valorDisplayTables(ankle_data))
 
-    #print(shoulder_data)
-else:
-    st.warning("No session data available to display.")
 
     

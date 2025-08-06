@@ -138,18 +138,18 @@ def percentile_strip_plot_from_table(value: int | float, metric: str, table: pd.
 #------------------------------------#
 # Prepare data for horizontal stacked bar plot
 def plot_reactive_performance(sprint_df, agility_df):
-    sprint_trial = sprint_df.iloc[0]
-    agility_trial = agility_df.iloc[0]
+    sprint_trial = sprint_df
+    agility_trial = agility_df
 
     sprint_splits = [
-        sprint_trial["split_time_10yd"],
-        sprint_trial["split_time_40yd"] - sprint_trial["split_time_10yd"],
+        sprint_trial["split_time_10yd"].mean().round(2),
+        sprint_trial["split_time_40yd"].mean().round(2),
     ]
     agility_splits = [
-        agility_trial["split_time_5yd"],
-        agility_trial["split_time_10yd"],
-        agility_trial["split_time_15yd"],
-        agility_trial["split_time_20yd"],
+        agility_trial["split_time_5yd"].mean().round(2),
+        agility_trial["split_time_10yd"].mean().round(2),
+        agility_trial["split_time_15yd"].mean().round(2),
+        agility_trial["split_time_20yd"].mean().round(2),
     ]
 
     y_labels = ["40 Yard Sprint", "Pro Agility Shuttle"]

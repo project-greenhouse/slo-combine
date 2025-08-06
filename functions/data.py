@@ -1,4 +1,5 @@
 import pandas as pd
+from pyparsing import col
 import streamlit as st
 from functions.db_client import GetSupaTableCached
 from hdforce import AuthManager, GetTests, GetAthletes
@@ -293,16 +294,31 @@ def swiftSprint(data, player_name):
     df_all["perc_10yd"] = (1 - df_all["total_time_10yd"].rank(pct=True)) * 100
 
     def get_external_percentile(time_val, col):
-        ref_df = external_percentiles.sort_values(by=col, ascending=True).reset_index(drop=True)
+        #.reset_index(drop=True)
         match = ref_df[ref_df[col] >= time_val]
         if match.empty:
-            return 100
+            return 0
         return match.iloc[0]["Percentile"]
 
     df_out = df_all[df_all["Name"] == player_name].copy()
-    df_out["Trial"] = range(1, len(df_out) + 1)
-    df_out["ext_perc_40yd"] = df_out["total_time_40yd"].apply(lambda x: get_external_percentile(x, "Sprint40"))
-    df_out["ext_perc_10yd"] = df_out["total_time_10yd"].apply(lambda x: get_external_percentile(x, "Split10"))
+
+    # Get best rep for 40yd
+    best_rep = df_out["total_time_40yd"].min()
+
+    # filter to best rep
+    df_out = df_out[df_out["total_time_40yd"] == best_rep].copy()
+
+    # Get external percentile
+    ref_df = external_percentiles.sort_values(by="Sprint40", ascending=True)
+
+    # Match the best rep to the reference DataFrame
+    match = ref_df[ref_df["Sprint40"] >= best_rep]
+    
+    if match.empty:
+        df_out["ext_perc_40yd"] = 0
+    else:
+        df_out["ext_perc_40yd"] = match.iloc[0]["Percentile"]
+   
     return df_out
 
 
@@ -315,35 +331,45 @@ def proAgility(data, player_name):
     external_percentiles = CombinePercentiles
 
     data.columns = data.columns.str.strip()
-    df = data[data["Name"] == player_name].copy()
-    
     # Check if the player exists in the data
-    if df.empty:
+    if data.empty:
         return pd.DataFrame()
-    
-    split_time_pivot = df.pivot(index="ActivityIdentifier", columns="Distance", values="Split")
-    total_time_pivot = df.pivot(index="ActivityIdentifier", columns="Distance", values="Total")
+
+    split_time_pivot = data.pivot(index=["Name", "ActivityIdentifier"], columns="Distance", values="Split")
+    total_time_pivot = data.pivot(index=["Name", "ActivityIdentifier"], columns="Distance", values="Total")
     split_time_pivot.columns = [f"split_time_{int(s)}yd" for s in split_time_pivot.columns]
     total_time_pivot.columns = [f"total_time_{int(s)}yd" for s in total_time_pivot.columns]
-    df_out = pd.concat([total_time_pivot, split_time_pivot], axis=1)
+    df_out = pd.concat([total_time_pivot, split_time_pivot], axis=1).reset_index()
     df_out["5_0_5_time"] = df_out["total_time_20yd"] - df_out["total_time_10yd"]
-    df_out = df_out.rename(columns={"total_time_20yd": "total_time"}).reset_index()
-    df_out.insert(0, "Name", player_name)
-    df_out["Trial"] = df_out.index + 1
+    df_out = df_out.rename(columns={"total_time_20yd": "total_time"})
+    df_out["Trial"] = range(1, len(df_out) + 1)
 
+    print(df_out)
     # Only calculate percentiles if we have the total_time column
     if "total_time" in df_out.columns:
         df_out["perc_proAgility"] = (1 - df_out["total_time"].rank(pct=True)) * 100
-        
-        def get_external_percentile(time_val):
-            import numpy as np
-            ref_df = external_percentiles.dropna(subset=["ProAgility", "Percentile"]).sort_values(by="ProAgility")
-            # Use interpolation to get exact percentile for the athlete's time
-            percentile = np.interp(time_val, ref_df["ProAgility"].values, ref_df["Percentile"].values)
-            return percentile
-
-        df_out["ext_perc_proAgility"] = df_out["total_time"].apply(get_external_percentile)
     
+        df_out = df_out[df_out["Name"] == player_name].copy()
+        print(df_out["total_time"])
+
+        # Get Fastest Rep
+        best_rep = df_out["total_time"].min()
+
+        # filter to best rep
+        df_out = df_out[df_out["total_time"] == best_rep].copy()
+
+        # Get external percentile
+        ref_df = external_percentiles.sort_values(by="ProAgility", ascending=True)
+
+        # Match the best rep to the reference DataFrame
+        match = ref_df[ref_df["ProAgility"] >= best_rep]
+
+        print(match)
+        if match.empty:
+            df_out["ext_perc_proAgility"] = 0
+        else:
+            df_out["ext_perc_proAgility"] = match.iloc[0]["Percentile"]
+
     return df_out
 
 #----------------------------------------------------------------------------#
