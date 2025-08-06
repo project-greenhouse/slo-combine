@@ -5,11 +5,8 @@ import pandas as pd
 import functions.data as db
 import functions.viz as viz
 import functions.utility as utility
-import functions.func_valor as val
-from functions.func_summary import get_athlete_summary
-
-# --- View Modules ---
 import views.valor_data as valor
+from functions.func_summary import get_athlete_summary
 
 # --- Retrieve selected athlete from session state ---
 selected_name = st.session_state.get("selected_name", None)
@@ -80,7 +77,11 @@ with col4:
     else:
         st.markdown("<b>Dominance: </b>" + athlete_info['LimbDominance'].values[0], unsafe_allow_html=True)
 
-# Movement Data Section
+#---------------------------------------------------------------------------------------------------#
+# ----- Movement Data Section -----
+#---------------------------------------------------------------------------------------------------#
+
+#----- Movement Section Header -----
 st.subheader(
     "Movement Data",
     anchor=False,
@@ -92,42 +93,56 @@ st.subheader(
 if selected_name:
     try:
         # Get Valor data for the selected athlete
-        token = db.valorToken
-        valorAthletes = val.ValorAthletes(token=token)
-        
+        token = valor.token
+        valorAthletes = valor.ValorAthletes(token=token)
+
         # Check if athlete exists in Valor data
-        athlete_match = valorAthletes[valorAthletes['Name'] == selected_name]
+        if selected_name == "Blake St. Vincent":
+            athlete_match = valorAthletes[valorAthletes['Name'] == "Blake St Vincent"]
+        else:
+            athlete_match = valorAthletes[valorAthletes['Name'] == selected_name]
+
         if not athlete_match.empty:
             athlete_id = athlete_match['ValorID'].values[0]
-            valorSessions = val.ValorSessions(token=token)
-            athleteSession = valorSessions[valorSessions['Athlete ID'] == athlete_id]
+            valorSessions = valor.ValorSessions(token=token)
             
-            # Get session IDs for different tests
-            hip_sessions = athleteSession[athleteSession['Session Name'] == "Hip Hinge Test"]
-            left_shoulder_sessions = athleteSession[athleteSession['Session Name'] == "Left 90-90 Test Unilateral Shoulder IR/ER"]
-            right_shoulder_sessions = athleteSession[athleteSession['Session Name'] == "Right 90-90 Test Unilateral Shoulder IR/ER"]
-            left_ankle_sessions = athleteSession[athleteSession['Session Name'] == "Left Regular Ankle Dorsiflexion - Weighted"]
-            right_ankle_sessions = athleteSession[athleteSession['Session Name'] == "Right Regular Ankle Dorsiflexion - Weighted"]
+            # Get session IDs for the selected athlete
+            sessionIds = valor.athlete_session_ids(AthleteId= athlete_id, valorSessions = valorSessions)
             
+            #---------------------------------------------------------------------------------------------------#
+            # ----- TABLE SETUP -----
+            #---------------------------------------------------------------------------------------------------#
+
+            # ----- Hip Hinge Data -----
+            HipHinge = valor.ValorHipHinge(token=token, key=sessionIds['hipHinge'].values[0])
+            # ----- Left Shoulder Data -----
+            LeftShoulder = valor.ValorLeftShoulder(token=token, key=sessionIds['leftShoulder'].values[0])
+            # ----- Right Shoulder Data -----
+            RightShoulder = valor.ValorRightShoulder(token=token, key=sessionIds['rightShoulder'].values[0])
+            # ----- Left Ankle Data -----
+            LeftAnkle = valor.ValorLeftAnkle(token=token, key=sessionIds['leftAnkle'].values[0])
+            # ----- Right Ankle Data -----
+            RightAnkle = valor.ValorRightAnkle(token=token, key=sessionIds['rightAnkle'].values[0])
+
+            #-------------------------------------------------------------------------------------------------------------#
             # Calculate scores if data exists
             shoulder_score = 0
             ankle_score = 0
             hip_score = 0
             
             # Hip score
-            if not hip_sessions.empty:
-                hip_data = val.ValorHipHinge(token=token, key=hip_sessions['s3Key'].values[0])
-                hip_score = hip_data["Score"].mean(skipna=True) * 100 if not hip_data.empty else 0
-            
+            if not HipHinge.empty:
+                hip_score = HipHinge["Score"].mean(skipna=True) * 100 if not HipHinge.empty else 0
+
             # Shoulder score (average of left and right)
             shoulder_scores = []
-            if not left_shoulder_sessions.empty:
-                left_shoulder_data = val.ValorLeftShoulder(token=token, key=left_shoulder_sessions['s3Key'].values[0])
+            if not LeftShoulder.empty:
+                left_shoulder_data = LeftShoulder
                 if not left_shoulder_data.empty:
                     shoulder_scores.append(left_shoulder_data["Score"].mean(skipna=True))
-            
-            if not right_shoulder_sessions.empty:
-                right_shoulder_data = val.ValorRightShoulder(token=token, key=right_shoulder_sessions['s3Key'].values[0])
+
+            if not RightShoulder.empty:
+                right_shoulder_data = RightShoulder
                 if not right_shoulder_data.empty:
                     shoulder_scores.append(right_shoulder_data["Score"].mean(skipna=True))
             
@@ -136,13 +151,13 @@ if selected_name:
             
             # Ankle score (average of left and right)
             ankle_scores = []
-            if not left_ankle_sessions.empty:
-                left_ankle_data = val.ValorLeftAnkle(token=token, key=left_ankle_sessions['s3Key'].values[0])
+            if not LeftAnkle.empty:
+                left_ankle_data = LeftAnkle
                 if not left_ankle_data.empty:
                     ankle_scores.append(left_ankle_data["Score"].mean(skipna=True))
-            
-            if not right_ankle_sessions.empty:
-                right_ankle_data = val.ValorRightAnkle(token=token, key=right_ankle_sessions['s3Key'].values[0])
+
+            if not RightAnkle.empty:
+                right_ankle_data = RightAnkle
                 if not right_ankle_data.empty:
                     ankle_scores.append(right_ankle_data["Score"].mean(skipna=True))
             
@@ -210,7 +225,12 @@ _, shldrTab, _ = st.columns([0.2, 1, 0.2], gap="small", border=False)
 with shldrTab:
     if selected_name:
         try:
-            val.valorDisplayTables(valor.shoulder_data)
+            # create a DataFrame from the left and right shoulder data
+            shoulder_data = pd.concat([LeftShoulder, RightShoulder], ignore_index=True)
+            # Display the shoulder data using valor's display function
+            styled_df = valor.valorDisplayTables(shoulder_data)
+            # Show in Streamlit with real per-cell coloring
+            st.dataframe(styled_df, use_container_width=True)
         except:
             st.info("Detailed movement data tables not available for this athlete.")
 
@@ -224,7 +244,12 @@ _, anklTab, _ = st.columns([0.2, 1, 0.2], gap="small", border=False)
 with anklTab:
     if selected_name:
         try:
-            val.valorDisplayTables(valor.ankle_data)
+            # create a DataFrame from the left and right ankle data
+            ankle_data = pd.concat([LeftAnkle, RightAnkle], ignore_index=True)
+            # Display the ankle data using valor's display function
+            styled_df = valor.valorDisplayTables(ankle_data)
+            # Show in Streamlit with real per-cell coloring
+            st.dataframe(styled_df, use_container_width=True)
         except:
             st.info("Detailed movement data tables not available for this athlete.")
 
@@ -239,8 +264,9 @@ with hipTab:
     if selected_name:
         try:
             # Filter rows from Metric column ="Hip ER (°)",  "Hip Flex. (°)", "Knee Flex. (°)", "Shin Angle (°)", "Torso Ext. (°)"
-            hingeData = valor.HipHinge[valor.HipHinge['Metric'].isin(["Hip ER (°)", "Hip Flex. (°)", "Knee Flex. (°)", "Shin Angle (°)", "Torso Ext. (°)"])]
-            val.valorDisplayTables(hingeData)
+            hingeData = HipHinge[HipHinge['Metric'].isin(["Hip ER (°)", "Hip Flex. (°)", "Knee Flex. (°)", "Shin Angle (°)", "Torso Ext. (°)"])]
+            styled_df = valor.valorDisplayTables(hingeData)
+            st.dataframe(styled_df, use_container_width=True)
         except:
             st.info("Detailed movement data tables not available for this athlete.")
 
@@ -474,9 +500,15 @@ with fpTab:
             # rename columns for clarity (mRSI -> Reactive Strength Index, Peak Rel Prop Power -> Peak Relative Power)
             dfPlatesCMJ.loc[dfPlatesCMJ['Metric'] == 'mRSI', 'Metric'] = 'Reactive Strength Index'
             dfPlatesCMJ.loc[dfPlatesCMJ['Metric'] == 'Peak Rel Prop Power (W/kg)', 'Metric'] = 'Peak Relative Power'
-            # If value 'Braking Asymmetry' value is negative append the absolute value of 'Braking Asymmetry' to '% Left', else append the absolute value to '% Right'
-            dfPlatesCMJ.loc[dfPlatesCMJ['Metric'] == 'Braking Asymmetry', 'Value'] = str(dfPlatesCMJ['Value'].apply(lambda x: f"{int(abs(x))}% Left" if x > 0 else f"{int(abs(x))}% Right"))
-            dfPlatesCMJ["value"] = dfPlatesCMJ["Value"].astype(str)  # Ensure Value is string for display
+            # If Braking Asymmetry value is negative append the absolute value to '% Left', else append the absolute value to '% Right'
+            braking_mask = dfPlatesCMJ['Metric'] == 'Braking Asymmetry'
+            if braking_mask.any():
+                braking_value = dfPlatesCMJ.loc[braking_mask, 'Value'].iloc[0]
+                if braking_value < 0:
+                    dfPlatesCMJ.loc[braking_mask, 'Value'] = f"{int(abs(braking_value))}% Left"
+                else:
+                    dfPlatesCMJ.loc[braking_mask, 'Value'] = f"{int(abs(braking_value))}% Right"
+            dfPlatesCMJ["Value"] = dfPlatesCMJ["Value"].astype(str)  # Ensure Value is string for display
             st.dataframe(dfPlatesCMJ, hide_index=True, use_container_width=True)
         except:
             st.info("Force Plate data tables not available for this athlete.")
