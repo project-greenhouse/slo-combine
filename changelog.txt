@@ -1,0 +1,5 @@
+# Code-8-Combine v1.0.1
+- update fix 'Standing Vert Combine Rank' value update
+- update fix 'Broad Jump Combine Rank' value update
+- Fix to Valor data tables not updating
+- Handle different spelling of 'Blake St(.) Vincent'

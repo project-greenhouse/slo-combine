@@ -4,7 +4,7 @@ from functions.db_client import GetSupaTableCached
 from hdforce import AuthManager, GetTests, GetAthletes
 from functions.func_swift import ProAgilityData, Sprint40Data, VertJumpData, BroadJumpData
 from functions.func_player_info import AthleteSignUpData
-from functions.func_valor import get_jwt_token, ValorAthletes
+import views.valor_data as valor
 
 
 #-----Initial Auth and Data Calls-----
@@ -12,9 +12,9 @@ from functions.func_valor import get_jwt_token, ValorAthletes
 AuthManager(authMethod="manual", refreshToken=st.secrets["HD_TOKEN"])
 
 # Authnentication for Valor -----
-ValorTokenDF = get_jwt_token()
+ValorTokenDF = valor.get_jwt_token()
 if not ValorTokenDF.empty:
-    valorToken = ValorTokenDF['id_token'].values[0]
+    valorIDToken = ValorTokenDF['id_token'].values[0]
     valorAccessToken = ValorTokenDF['access_token'].values[0]
 
 ##-----Get Supabase Tables-----
@@ -75,7 +75,7 @@ HawkinAthletes = HawkinRoster  # <-- keep full DataFrame
 
 # Valor Athletes -----
 try:
-    dfValorAthletes = ValorAthletes(token=valorToken)
+    dfValorAthletes = valor.ValorAthletes(token=valorIDToken)
 except Exception as e:
     st.error(f"Failed to load Valor athletes: {e}")
     dfValorAthletes = pd.DataFrame()  # Fallback to empty DataFrame
@@ -353,6 +353,14 @@ def proAgility(data, player_name):
 ## Individual Vertical Jump Data
 def verticalJump(player_name=None):
     data = dfVerticalJump
+
+    # Calculate percentile ranks for all values in BestBroadJump then filter for the value of player_name
+    if player_name and not data.empty:
+        data["VerticalJump"] = data["VerticalJump"].astype(float)
+        data["perc_vert"] = (data["VerticalJump"].rank(pct=True)) * 100
+        data["VerticalJump"] = data["VerticalJump"].round(1)
+    else:
+        return pd.DataFrame()
     
     if player_name:
         df = data[data["Name"] == player_name].copy()
@@ -361,9 +369,11 @@ def verticalJump(player_name=None):
 
     # Normalize column names
     df.columns = df.columns.str.strip()
-    df_all = df[["Name", "VerticalJump"]].copy()
-    df_all["perc_vert"] = (df_all["VerticalJump"].rank(pct=True)) * 100
-
+    df_all = df[["Name", "VerticalJump", "perc_vert"]].copy()
+    # Calculate external percentiles
+    if df_all.empty:
+        return pd.DataFrame()
+    
     external_percentiles = CombinePercentiles
 
     def get_external_percentile(val, col):
@@ -386,6 +396,14 @@ def verticalJump(player_name=None):
 def broadJump(player_name=None):
     data = dfBroadJump
 
+    # Calculate percentile ranks for all values in BestBroadJump then filter for the value of player_name
+    if player_name and not data.empty:
+        data["BestBroadJump"] = data["BestBroadJump"].astype(float)
+        data["perc_broad"] = (data["BestBroadJump"].rank(pct=True)) * 100
+        data["BestBroadJump"] = data["BestBroadJump"].round(2)
+    else:
+        return pd.DataFrame()
+
     if player_name:
         df = data[data["Name"] == player_name].copy()
     else:
@@ -393,8 +411,7 @@ def broadJump(player_name=None):
 
     # Normalize column names
     df.columns = df.columns.str.strip()
-    df_all = df[["Name", "BestBroadJump"]].copy()
-    df_all["perc_broad"] = (df_all["BestBroadJump"].rank(pct=True)) * 100
+    df_all = df[["Name", "BestBroadJump", "perc_broad"]].copy()
 
     external_percentiles = CombinePercentiles
 
