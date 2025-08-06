@@ -89,8 +89,6 @@ if roster_df is not None and isinstance(roster_df, pd.DataFrame) and "Name" in r
                         )
                     except Exception as e:
                         st.sidebar.error(f"PNG export failed: {e}")
-else:
-    st.sidebar.warning("No valid athlete roster available.")
 
 # --- SIDEBAR FOOTER ---
 st.sidebar.markdown("---")
