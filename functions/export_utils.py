@@ -8,8 +8,8 @@ import tempfile
 import pdfkit
 from html2image import Html2Image
 import os
-
-from functions import data as db, func_valor as val, func_summary, viz, utility
+from views import valor_data as val
+from functions import data as db, func_summary, viz, utility
 
 
 def fig_to_base64(fig, kind="plotly"):
