@@ -545,7 +545,6 @@ if not AthleteSelected.empty:
     # ----- Right Ankle Data -----
     RightAnkle = ValorRightAnkle(token=token, key=sessionDF['rightAnkle'].values[0])
 else:
-    st.error("No athlete selected or athlete not found")
     sessionDF = pd.DataFrame()  # Create empty DataFrame to prevent further errors
 
 # Only proceed if we have session data
