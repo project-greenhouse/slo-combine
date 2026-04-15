@@ -1,74 +1,98 @@
-# Summary Feature Setup Instructions
+# SLO Combine — Setup & Reference
 
-## Supabase Table Setup
+## Firebase Project
 
-To enable persistent storage of athlete summaries, you need to create a table in your Supabase database.
+- **Project ID:** `code-8-performance`
+- **Service account key:** `code8-vue-app/service-account.json` (local only — do not commit)
+- **Admin SDK scripts** at repo root use this key:
+  - `actions.py` — upload base athletes to Firestore
+  - `create_live_admin.py` — provision admin users in Firebase Auth
+  - `seed_percentiles.py` — seed percentile lookup collections
+  - `restore_summaries.py` — backfill legacy athlete summaries
 
-### SQL Command to Create Table
+### Firestore collections
+- `athlete_info` — athlete roster keyed by auto-ID, `Name` field used for lookups
+- `athlete_summaries` — rich-text summaries (HTML), read-public, write restricted to `admin` / `coach` custom claims (see `code8-vue-app/firestore.rules`)
+- Percentile collections seeded by `seed_percentiles.py`
 
-Run the following SQL command in your Supabase SQL editor:
+### Auth
+Custom claims drive authorization:
+- `role: "admin"` — full write access
+- `role: "coach"` — write access to summaries
+Set via `auth.set_custom_user_claims(uid, {"role": "..."})` (see `create_live_admin.py`).
 
-```sql
-CREATE TABLE athlete_summaries (
-    id SERIAL PRIMARY KEY,
-    athlete_name VARCHAR(255) NOT NULL,
-    summary_html TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+## Vue App (`code8-vue-app/`)
 
--- Create index for faster lookups
-CREATE INDEX idx_athlete_summaries_name ON athlete_summaries(athlete_name);
+Vue 3 + TypeScript + Vite + Pinia + Firebase SDK + Tailwind.
 
--- Enable Row Level Security (optional but recommended)
-ALTER TABLE athlete_summaries ENABLE ROW LEVEL SECURITY;
-
--- Create policy to allow all operations (adjust as needed for your security requirements)
-CREATE POLICY "Allow all operations on athlete_summaries" ON athlete_summaries
-    FOR ALL USING (true);
+### Local dev
+```bash
+cd code8-vue-app
+npm install
+npm run dev          # Vite dev server
+npm run build        # type-check + production build into dist/
+npm run preview      # preview built dist/
 ```
 
-### Table Structure
+### Firebase Functions (Python)
+Cloud Functions live in `code8-vue-app/functions/` (Python, `firebase-functions` SDK).
+```bash
+cd code8-vue-app/functions
+python -m venv venv
+venv\Scripts\activate          # Windows
+pip install -r requirements.txt
+```
+`functions/.env` holds runtime secrets (HD_TOKEN, Bookeo creds, etc.) — not committed.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PRIMARY KEY | Auto-incrementing unique identifier |
-| athlete_name | VARCHAR(255) | Name of the athlete (must match names in roster) |
-| summary_html | TEXT | HTML content of the rich text summary |
-| created_at | TIMESTAMP | When the record was created |
-| updated_at | TIMESTAMP | When the record was last modified |
+### Emulators
+Configured in `code8-vue-app/firebase.json`:
+- Auth: `localhost:9099`
+- Functions: `localhost:5001`
+- Emulator UI enabled
 
-## Features
+```bash
+cd code8-vue-app
+firebase emulators:start
+```
 
-### Summary Button
-- Located in the sidebar when an athlete is selected
-- Opens a modal with rich text editor
-- Allows creating, editing, and deleting summaries
+### Deploy
+```bash
+cd code8-vue-app
+npm run build
+firebase deploy                        # hosting + functions + rules
+firebase deploy --only hosting         # SPA only
+firebase deploy --only functions       # Python functions only
+firebase deploy --only firestore:rules # rules only
+```
+Hosting serves `code8-vue-app/dist/` with SPA rewrite to `index.html`.
 
-### Rich Text Editor
-- Uses Quill.js editor via streamlit-quill
-- Supports formatting: bold, italic, underline
-- Supports bullet points and numbered lists
-- Supports text alignment and colors
+## Data Sources
 
-### Display
-- Summary appears between "Athlete Information" and "Movement Data" sections
-- Only shows when an athlete is selected and has a summary
-- Renders HTML content safely
+- **Hawkin Dynamics** — force plate / jump analysis (`hdforce` SDK, `HD_TOKEN` env var)
+- **Valor** — movement screening, JWT auth handled by the Python functions
+- **Swift** — speed/agility timing (CSV ingest)
+- **Bookeo** — scheduling / customer sync (see below)
 
-## Fallback Mode
+## Bookeo API
 
-If Supabase is not available or not configured, the system will:
-1. Show a warning message
-2. Use browser session state for temporary storage
-3. Data will be lost when the browser session ends
+- **Application Id:** `YRALT4TH7NPU`
+- **Secret Key:** `aaHWtJwuVkvTey2cc1wviAercth68Asg`
+- **Authorization URL:** https://signin.bookeo.com/?authappid=YRALT4TH7NPU&permissions=customers_rw_all,bookings_rw_all,blocks_rwd_all,availability_r
 
-## Usage
+## Repo layout
 
-1. Select an athlete from the sidebar dropdown
-2. Click "📝 Add/Edit Summary" button
-3. Use the rich text editor to create your summary
-4. Click "💾 Save" to store the summary
-5. The summary will appear on the main dashboard
-6. Use "🗑️ Delete" to remove a summary
-7. Use "❌ Cancel" to close without saving
+```
+slo-combine/
+├── code8-vue-app/              # Vue 3 + Firebase app (primary)
+│   ├── src/                    # Vue components, stores, views
+│   ├── functions/              # Python Firebase Cloud Functions
+│   ├── firestore.rules         # Firestore security rules
+│   ├── firebase.json           # Firebase project config
+│   └── service-account.json    # Local-only admin key
+├── data/                       # CSV data (percentiles, rosters)
+├── assets/                     # Images / logos
+├── actions.py                  # Admin: upload athletes
+├── create_live_admin.py        # Admin: create admin user
+├── seed_percentiles.py         # Admin: seed percentile tables
+└── restore_summaries.py        # Admin: migrate legacy summaries
+```

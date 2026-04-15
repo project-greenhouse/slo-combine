@@ -1,5 +1,6 @@
-# Streamlit Specific
-secrets.toml
+# Athlete PII — kept local for dev/seeding, not committed
+data/athlete_summaries.csv
+AthleteExport*.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
