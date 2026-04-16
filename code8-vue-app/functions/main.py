@@ -134,135 +134,102 @@ def safe_execute(func):
 @safe_execute
 def get_roster(req: https_fn.CallableRequest) -> any:
     """
-    Fetches athletes from Valor API, Hawkin Dynamics, and Firestore,
-    processes them with Pandas, and returns to Vue.
+    Builds the roster from athlete_info (Firestore) as the single source of truth.
+    Joins external systems (HD, Valor) by stored foreign keys, NOT by name.
     """
-    print("DEBUG: Executing get_roster with live APIs")
 
-    # 1. Get Valor Athletes
-    valor_athletes_df = pd.DataFrame(columns=["Name", "ValorID"])
-    try:
-        token = get_jwt_token()
-        if token:
-            valor_endpoint = os.environ.get("VALOR_URL", "").strip().strip("\"'")
-            headers = {"Authorization": f"Bearer {token}"}
-            response = requests.get(f"{valor_endpoint}athletes", headers=headers)
-            
-            if response.status_code == 200:
-                raw = response.json().get("body", "[]")
-                athletes = json.loads(raw)
-                df = pd.DataFrame(athletes)
-                if not df.empty:
-                    df['Name'] = df['FirstName'] + ' ' + df['LastName']
-                    
-                    # Safely find the ID column since APIs can be inconsistent with casing
-                    id_col = next((col for col in ['ValorID', 'Athlete ID', 'AthleteId', 'athleteId', 'id', 'Id'] if col in df.columns), None)
-                    
-                    if id_col:
-                        df['ValorID'] = df[id_col].astype(str)
-                    else:
-                        print(f"Warning: Could not find ID column. Available columns: {df.columns.tolist()}")
-                        df['ValorID'] = None
-                        
-                    valor_athletes_df = df[['Name', 'ValorID']]
-            else:
-                print(f"Failed to fetch Valor athletes: {response.status_code}")
-    except Exception as e:
-        print(f"Error fetching Valor roster: {e}")
+    # 1. Load athlete_info — this IS the roster
+    athlete_info_docs = list(db.collection("athlete_info").stream())
+    athletes = []
+    for doc in athlete_info_docs:
+        d = doc.to_dict()
+        d["athlete_uid"] = doc.id
+        athletes.append(d)
 
-    # 2. Get Hawkin Dynamics Athletes
-    hawkin_roster = pd.DataFrame(columns=["Name", "id"])
+    if not athletes:
+        return {"status": "success", "data": []}
+
+    # Build lookup sets from stored foreign keys
+    hd_ids = {str(a["HawkinID"]) for a in athletes if a.get("HawkinID")}
+    valor_ids = {str(a["ValorID"]) for a in athletes if a.get("ValorID")}
+
+    # 2. Fetch HD athletes (for name display / validation of links)
+    hd_by_id = {}
     try:
         hd_token = os.environ.get("HD_TOKEN", "").strip().strip("\"'")
         if hd_token:
             AuthManager(authMethod="manual", refreshToken=hd_token)
-            hawkin_roster = GetAthletes()
-            if not hawkin_roster.empty and "name" in hawkin_roster.columns:
-                hawkin_roster["Name"] = hawkin_roster["name"]
+            hd_df = GetAthletes()
+            if not hd_df.empty and "id" in hd_df.columns:
+                for _, row in hd_df.iterrows():
+                    hd_by_id[str(row["id"])] = row.get("name", "")
     except Exception as e:
-        print(f"Error fetching Hawkin Dynamics roster: {e}")
+        print(f"Error fetching HD roster: {e}")
 
-    # 3. Get Sprint/ProAgility/Jump Athletes (from Firestore)
-    def get_firestore_data(collection_name):
-        try:
-            docs = db.collection(collection_name).stream()
-            data = []
-            for doc in docs:
-                d = doc.to_dict()
-                if collection_name == "athlete_info":
-                    d["athlete_uid"] = doc.id
-                data.append(d)
-            return pd.DataFrame(data) if data else pd.DataFrame()
-        except Exception as e:
-            print(f"Error fetching Firestore collection {collection_name}: {e}")
-            return pd.DataFrame()
+    # 3. Fetch Valor athletes (for name display / validation of links)
+    valor_by_id = {}
+    try:
+        token = get_jwt_token()
+        if token:
+            valor_endpoint = os.environ.get("VALOR_URL", "").strip().strip("\"'")
+            response = requests.get(f"{valor_endpoint}athletes", headers={"Authorization": f"Bearer {token}"})
+            if response.status_code == 200:
+                raw = response.json().get("body", "[]")
+                parsed = json.loads(raw) if isinstance(raw, str) else raw
+                for a in parsed:
+                    fn = (a.get("FirstName") or "").strip()
+                    ln = (a.get("LastName") or "").strip()
+                    id_col = next((a.get(k) for k in ['ValorID', 'Athlete ID', 'AthleteId', 'athleteId', 'id', 'Id'] if a.get(k)), None)
+                    if id_col:
+                        valor_by_id[str(id_col)] = f"{fn} {ln}".strip()
+    except Exception as e:
+        print(f"Error fetching Valor roster: {e}")
 
-    sprint_df = get_firestore_data("sprint40")
-    pro_agil_df = get_firestore_data("pro_agility")
-    vert_jump_df = get_firestore_data("standing_vert")
-    broad_jump_df = get_firestore_data("broad_jump")
-    athlete_info_df = get_firestore_data("athlete_info")
+    # 4. Check which athletes have Firestore metric data (by athlete_uid)
+    sprint_uids = set()
+    proagil_uids = set()
+    try:
+        for doc in db.collection("sprint40").stream():
+            uid = doc.to_dict().get("athlete_uid")
+            if uid:
+                sprint_uids.add(uid)
+        for doc in db.collection("pro_agility").stream():
+            uid = doc.to_dict().get("athlete_uid")
+            if uid:
+                proagil_uids.add(uid)
+    except Exception as e:
+        print(f"Error checking Firestore metric collections: {e}")
 
-    # 4. Combine all names to form the roster
-    all_names = []
-    for df in [sprint_df, hawkin_roster, pro_agil_df, vert_jump_df, broad_jump_df, valor_athletes_df, athlete_info_df]:
-        if isinstance(df, pd.DataFrame) and "Name" in df.columns:
-            # Strip whitespace to prevent duplicates like "John Doe" and "John Doe "
-            names = df["Name"].dropna().astype(str).str.strip().unique().tolist()
-            all_names.extend(names)
-
-    # Use a case-insensitive deduplication strategy while preserving the original casing
-    roster_dict = {}
-    for name in all_names:
-        if name.lower() not in roster_dict:
-            roster_dict[name.lower()] = name
-            
-    roster_names = list(roster_dict.values())
-
-    # Helper to extract IDs from the various dataframes
-    def get_id(df, name, id_col):
-        if isinstance(df, pd.DataFrame) and "Name" in df.columns and id_col in df.columns:
-            # Match stripped and lowercase name to be completely safe
-            match = df[df["Name"].astype(str).str.strip().str.lower() == name.lower()]
-            if not match.empty:
-                return match[id_col].values[0]
-        return None
-        
-    def get_info(df, name):
-        if isinstance(df, pd.DataFrame) and "Name" in df.columns:
-            match = df[df["Name"].astype(str).str.strip().str.lower() == name.lower()]
-            if not match.empty:
-                d = match.iloc[0].to_dict()
-                return {k: v for k, v in d.items() if pd.notnull(v)}
-        return {}
-
-    # 5. Build the final merged roster
+    # 5. Build the final roster — all data comes from athlete_info, validated by FK
     roster_list = []
-    for name in roster_names:
-        info = get_info(athlete_info_df, name)
+    for a in athletes:
+        uid = a.get("athlete_uid")
+        hid = str(a["HawkinID"]) if a.get("HawkinID") else None
+        vid = str(a["ValorID"]) if a.get("ValorID") else None
+
         roster_list.append({
-            "Name": name,
-            "HawkinID": get_id(hawkin_roster, name, "id"),
-            "SprintID": get_id(sprint_df, name, "AthleteId"),
-            "ProAgilID": get_id(pro_agil_df, name, "AthleteId"),
-            "ValorID": get_id(valor_athletes_df, name, "ValorID"),
-            "athlete_uid": info.get("athlete_uid"),
-            "Email": info.get("Email") or info.get("email"),
-            "BirthDate": info.get("BirthDate"),
-            "Gender": info.get("Gender"),
-            "GradYear": info.get("GradYear"),
-            "SchoolGrade": info.get("SchoolGrade"),
-            "HeightInches": info.get("HeightInches"),
-            "LimbDominance": info.get("LimbDominance"),
-            "Sports": info.get("Sports"),
-            "Positions": info.get("Positions"),
-            "CurrentSchool": info.get("CurrentSchool")
+            "Name": a.get("Name", ""),
+            "athlete_uid": uid,
+            "HawkinID": hid if hid and hid in hd_by_id else a.get("HawkinID"),
+            "ValorID": vid if vid and vid in valor_by_id else a.get("ValorID"),
+            "SprintID": uid if uid in sprint_uids else None,
+            "ProAgilID": uid if uid in proagil_uids else None,
+            "Email": a.get("Email") or a.get("email"),
+            "BirthDate": a.get("BirthDate"),
+            "Gender": a.get("Gender"),
+            "GradYear": a.get("GradYear"),
+            "SchoolGrade": a.get("SchoolGrade"),
+            "HeightInches": a.get("HeightInches"),
+            "LimbDominance": a.get("LimbDominance"),
+            "Sports": a.get("Sports"),
+            "Positions": a.get("Positions"),
+            "CurrentSchool": a.get("CurrentSchool"),
         })
 
     roster_df = pd.DataFrame(roster_list)
     if not roster_df.empty and "Name" in roster_df.columns:
         roster_df = roster_df.sort_values(by="Name")
-    
+
     raw_data = {
         "status": "success",
         "data": roster_df.to_dict(orient="records")
@@ -278,8 +245,9 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
     data = req.data
     athlete_uid = data.get("athlete_uid")
     athlete_name = data.get("Name")
+    athlete_hawkin_id = data.get("HawkinID")
     athlete_valor_id = data.get("ValorID")
-    
+
     if not athlete_uid:
         return {"status": "error", "message": "No athlete_uid provided"}
         
@@ -320,20 +288,24 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
     except Exception as e:
         print(f"Error calculating combine ranks: {e}")
         
-    # Fetch HD Data
+    # Fetch HD Data — join by HawkinID (foreign key), fallback to name
     try:
         hd_token = os.environ.get("HD_TOKEN", "").strip().strip("\"'")
-        if hd_token and athlete_name:
+        if hd_token and (athlete_hawkin_id or athlete_name):
             AuthManager(authMethod="manual", refreshToken=hd_token)
-            
+
             global hd_cache
-            
+
             if hd_cache["CMJ"] is None:
                 hd_cache["CMJ"] = GetTests(typeId="CMJ", from_="2025-07-23", to_="2025-07-27")
-                
+
             cmj_data = hd_cache["CMJ"]
             if not cmj_data.empty:
-                cmj_athlete = cmj_data[cmj_data["athlete_name"] == athlete_name]
+                cmj_athlete = pd.DataFrame()
+                if athlete_hawkin_id and "athlete_id" in cmj_data.columns:
+                    cmj_athlete = cmj_data[cmj_data["athlete_id"].astype(str) == str(athlete_hawkin_id)]
+                if cmj_athlete.empty and athlete_name and "athlete_name" in cmj_data.columns:
+                    cmj_athlete = cmj_data[cmj_data["athlete_name"] == athlete_name]
                 if not cmj_athlete.empty:
                     # Calculate FP Percentiles (Elite Rank)
                     fp_pct = [d.to_dict() for d in db.collection("fp_percentiles").stream()]
@@ -353,10 +325,14 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
 
             if hd_cache["MR"] is None:
                 hd_cache["MR"] = GetTests(typeId="MR", from_="2025-07-23", to_="2025-07-27")
-                
+
             mr_data = hd_cache["MR"]
             if not mr_data.empty:
-                mr_athlete = mr_data[mr_data["athlete_name"] == athlete_name]
+                mr_athlete = pd.DataFrame()
+                if athlete_hawkin_id and "athlete_id" in mr_data.columns:
+                    mr_athlete = mr_data[mr_data["athlete_id"].astype(str) == str(athlete_hawkin_id)]
+                if mr_athlete.empty and athlete_name and "athlete_name" in mr_data.columns:
+                    mr_athlete = mr_data[mr_data["athlete_name"] == athlete_name]
                 if not mr_athlete.empty:
                     mr_df = pd.DataFrame({
                         "Number of Jumps": mr_athlete["number_of_jumps_count"],

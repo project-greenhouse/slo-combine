@@ -90,7 +90,7 @@ export const useAthleteStore = defineStore('athlete', () => {
     
     try {
       const getMetrics = httpsCallable(functions, 'get_athlete_metrics');
-      const result = await getMetrics({ athlete_uid: athlete.athlete_uid, Name: athlete.Name, ValorID: athlete.ValorID });
+      const result = await getMetrics({ athlete_uid: athlete.athlete_uid, Name: athlete.Name, HawkinID: athlete.HawkinID, ValorID: athlete.ValorID });
       const responseData = result.data as any;
       
       // Only update state if this is still the active athlete requested (prevents ghosting!)
