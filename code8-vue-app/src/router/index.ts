@@ -5,6 +5,7 @@ import EvaluationHubView from '../views/EvaluationHubView.vue';
 import PresentationView from '../views/PresentationView.vue';
 import LoginView from '../views/LoginView.vue';
 import AdminView from '../views/AdminView.vue';
+import AthleteMatchingView from '../views/AthleteMatchingView.vue';
 import StandingReachEntry from '../views/entry/StandingReachEntry.vue';
 import VerticalJumpEntry from '../views/entry/VerticalJumpEntry.vue';
 import BroadJumpEntry from '../views/entry/BroadJumpEntry.vue';
@@ -35,6 +36,12 @@ const router = createRouter({
       name: 'evaluation',
       component: EvaluationHubView,
       meta: { requiresAuth: true }
+    },
+    {
+      path: '/match-athletes',
+      name: 'match-athletes',
+      component: AthleteMatchingView,
+      meta: { requiresAuth: true, requiresStaff: true }
     },
     {
       path: '/entry/standing-reach',

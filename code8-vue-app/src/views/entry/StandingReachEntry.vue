@@ -6,6 +6,7 @@ import { functions } from '../../firebase/config';
 
 const athleteStore = useAthleteStore();
 const search = ref('');
+const dropdownOpen = ref(false);
 const selected = ref<RosterItem | null>(null);
 const inches = ref<number | null>(null);
 const saving = ref(false);
@@ -16,12 +17,17 @@ onMounted(() => { athleteStore.fetchRoster(); });
 
 const filtered = computed(() => {
   const q = search.value.toLowerCase();
+  if (!q) return athleteStore.roster;
   return athleteStore.roster.filter(a => a.Name.toLowerCase().includes(q));
 });
+
+const openDropdown = () => { dropdownOpen.value = true; };
+const closeDropdown = () => { setTimeout(() => { dropdownOpen.value = false; }, 200); };
 
 const pick = (athlete: RosterItem) => {
   selected.value = athlete;
   search.value = '';
+  dropdownOpen.value = false;
   inches.value = null;
 };
 
@@ -73,15 +79,16 @@ const advanceToNext = () => {
       <input
         v-model="search"
         type="text"
-        :placeholder="selected ? selected.Name : 'Search athlete...'"
+        :placeholder="selected ? selected.Name : 'Search or scroll to select...'"
         class="w-full bg-gray-50 border border-gray-300 rounded-lg px-4 py-3 text-base focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none"
-        @focus="search = ''"
+        @focus="openDropdown"
+        @blur="closeDropdown"
       />
-      <div v-if="search && filtered.length" class="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+      <div v-if="dropdownOpen && filtered.length" class="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-72 overflow-y-auto overscroll-contain">
         <button
           v-for="a in filtered" :key="a.Name"
-          @click="pick(a)"
-          class="w-full text-left px-4 py-3 text-base hover:bg-gray-100 flex justify-between items-center"
+          @mousedown.prevent="pick(a)"
+          class="w-full text-left px-4 py-3 text-base hover:bg-gray-100 active:bg-gray-200 flex justify-between items-center border-b border-gray-50 last:border-0"
         >
           <span>{{ a.Name }}</span>
           <span v-if="a.athlete_uid && savedAthletes.has(a.athlete_uid)" class="text-xs text-green-600 font-medium">Done</span>

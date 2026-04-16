@@ -597,7 +597,7 @@ def update_athlete_info(req: https_fn.CallableRequest) -> any:
     uid = data.get("athlete_uid")
     
     update_data = {}
-    for key in ["Name", "Email", "BirthDate", "Gender", "GradYear", "SchoolGrade", "HeightInches", "LimbDominance", "Sports", "Positions", "CurrentSchool"]:
+    for key in ["Name", "Email", "BirthDate", "Gender", "GradYear", "SchoolGrade", "HeightInches", "LimbDominance", "Sports", "Positions", "CurrentSchool", "ValorID", "HawkinID"]:
         if key in data:
             update_data[key] = data[key]
             
@@ -610,6 +610,52 @@ def update_athlete_info(req: https_fn.CallableRequest) -> any:
         db.collection("athlete_info").document(uid).set(update_data, merge=True)
         
     return {"status": "success", "message": "Successfully updated athlete info.", "athlete_uid": uid}
+
+
+# ──────────────────────────────────────────────
+# Valor athlete list (for matching UI)
+# ──────────────────────────────────────────────
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=60, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def get_valor_athletes(req: https_fn.CallableRequest) -> any:
+    """Returns the list of athletes from Valor for the matching UI."""
+    if not req.auth or not req.auth.uid:
+        return {"status": "error", "message": "Unauthenticated caller"}
+    caller = firebase_auth.get_user(req.auth.uid)
+    role = (caller.custom_claims or {}).get("role", "athlete")
+    if role not in ["admin", "coach"]:
+        return {"status": "error", "message": "Permission denied."}
+
+    jwt = get_jwt_token()
+    valor_url = os.environ.get("VALOR_URL", "").strip().strip("\"'")
+    if not jwt or not valor_url:
+        return {"status": "error", "message": "Valor credentials not configured."}
+
+    response = requests.get(f"{valor_url}/athletes", headers={"Authorization": f"Bearer {jwt}"}, timeout=30)
+    if response.status_code != 200:
+        return {"status": "error", "message": f"Valor API returned {response.status_code}"}
+
+    raw = response.json()
+    athletes = []
+    for a in raw:
+        fn = (a.get("FirstName") or "").strip()
+        ln = (a.get("LastName") or "").strip()
+        aid = str(a.get("AthleteId") or a.get("Id") or "")
+        if fn or ln:
+            athletes.append({"ValorID": aid, "Name": f"{fn} {ln}".strip()})
+
+    # Also load which ValorIDs are already assigned in Firestore
+    assigned_ids = set()
+    for doc in db.collection("athlete_info").stream():
+        vid = doc.to_dict().get("ValorID")
+        if vid:
+            assigned_ids.add(str(vid))
+
+    for a in athletes:
+        a["assigned"] = a["ValorID"] in assigned_ids
+
+    return {"status": "success", "data": athletes}
 
 
 # ──────────────────────────────────────────────

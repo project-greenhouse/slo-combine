@@ -96,6 +96,86 @@ const lastTestedDate = computed(() => {
   return maxDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 });
 
+// Valor Linking State
+const valorAthletes = ref<{ ValorID: string; Name: string; assigned: boolean }[]>([]);
+const valorLoading = ref(false);
+const valorSearch = ref('');
+const valorDropdownOpen = ref(false);
+const valorSaving = ref(false);
+const valorToast = ref('');
+
+const isStaff = computed(() => authStore.userRole === 'admin' || authStore.userRole === 'coach');
+
+const filteredValorAthletes = computed(() => {
+  const q = valorSearch.value.toLowerCase();
+  const list = valorAthletes.value.filter(a => !a.assigned);
+  if (!q) return list;
+  return list.filter(a => a.Name.toLowerCase().includes(q));
+});
+
+const fetchValorAthletes = async () => {
+  if (valorAthletes.value.length > 0) return;
+  valorLoading.value = true;
+  try {
+    const fn = httpsCallable(functions, 'get_valor_athletes');
+    const res = await fn({});
+    const data = res.data as any;
+    if (data.status === 'success') valorAthletes.value = data.data;
+  } catch { /* ignore */ }
+  finally { valorLoading.value = false; }
+};
+
+const assignValor = async (valorId: string, valorName: string) => {
+  if (!store.selectedAthlete?.athlete_uid) return;
+  valorSaving.value = true;
+  valorDropdownOpen.value = false;
+  valorSearch.value = '';
+  try {
+    const fn = httpsCallable(functions, 'update_athlete_info');
+    const res = await fn({ athlete_uid: store.selectedAthlete.athlete_uid, ValorID: valorId });
+    const data = res.data as any;
+    if (data.status === 'success') {
+      const idx = store.roster.findIndex(a => a.athlete_uid === store.selectedAthlete!.athlete_uid);
+      if (idx !== -1) {
+        store.roster[idx] = { ...store.roster[idx], ValorID: valorId };
+        store.selectedAthlete = store.roster[idx];
+      }
+      // Mark as assigned in local cache
+      const va = valorAthletes.value.find(a => a.ValorID === valorId);
+      if (va) va.assigned = true;
+      valorToast.value = `Linked to Valor: ${valorName}`;
+      setTimeout(() => { valorToast.value = ''; }, 3000);
+    }
+  } catch { /* ignore */ }
+  finally { valorSaving.value = false; }
+};
+
+const unlinkValor = async () => {
+  if (!store.selectedAthlete?.athlete_uid) return;
+  valorSaving.value = true;
+  try {
+    const fn = httpsCallable(functions, 'update_athlete_info');
+    const res = await fn({ athlete_uid: store.selectedAthlete.athlete_uid, ValorID: '' });
+    const data = res.data as any;
+    if (data.status === 'success') {
+      const oldId = store.selectedAthlete.ValorID;
+      const idx = store.roster.findIndex(a => a.athlete_uid === store.selectedAthlete!.athlete_uid);
+      if (idx !== -1) {
+        store.roster[idx] = { ...store.roster[idx], ValorID: null };
+        store.selectedAthlete = store.roster[idx];
+      }
+      // Free up in local cache
+      if (oldId) {
+        const va = valorAthletes.value.find(a => a.ValorID === String(oldId));
+        if (va) va.assigned = false;
+      }
+      valorToast.value = 'Valor link removed';
+      setTimeout(() => { valorToast.value = ''; }, 3000);
+    }
+  } catch { /* ignore */ }
+  finally { valorSaving.value = false; }
+};
+
 // Edit Modal State
 const showEditModal = ref(false);
 const isSaving = ref(false);
@@ -256,6 +336,70 @@ const saveAthleteInfo = async () => {
                 <div class="bg-gray-50 p-4 rounded-xl border border-gray-100">
                   <p class="text-xs text-gray-500 font-medium mb-1">Limb Dominance</p>
                   <p class="font-bold text-gray-900">{{ store.selectedAthlete.LimbDominance || '--' }}</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- System Integrations -->
+            <div v-if="isStaff">
+              <h3 class="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">System Integrations</h3>
+
+              <div v-if="valorToast" class="mb-3 p-2 rounded-lg bg-green-100 text-green-800 text-sm font-medium">{{ valorToast }}</div>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Hawkin Dynamics -->
+                <div class="bg-gray-50 p-4 rounded-xl border border-gray-100">
+                  <p class="text-xs text-gray-500 font-medium mb-1">Hawkin Dynamics</p>
+                  <div v-if="store.selectedAthlete?.HawkinID" class="flex items-center gap-2">
+                    <span class="inline-block w-2 h-2 rounded-full bg-green-500"></span>
+                    <span class="font-bold text-gray-900 text-sm truncate">Linked</span>
+                  </div>
+                  <div v-else class="flex items-center gap-2">
+                    <span class="inline-block w-2 h-2 rounded-full bg-gray-300"></span>
+                    <span class="text-sm text-gray-500">Not linked</span>
+                  </div>
+                </div>
+
+                <!-- Valor -->
+                <div class="bg-gray-50 p-4 rounded-xl border border-gray-100">
+                  <p class="text-xs text-gray-500 font-medium mb-1">Valor</p>
+
+                  <!-- Linked state -->
+                  <div v-if="store.selectedAthlete?.ValorID" class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="inline-block w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                      <span class="font-bold text-gray-900 text-sm truncate">
+                        {{ valorAthletes.find(a => a.ValorID === String(store.selectedAthlete?.ValorID))?.Name || 'Linked' }}
+                      </span>
+                    </div>
+                    <button @click="unlinkValor" :disabled="valorSaving" class="text-xs text-red-500 hover:text-red-700 font-medium flex-shrink-0">
+                      {{ valorSaving ? '...' : 'Unlink' }}
+                    </button>
+                  </div>
+
+                  <!-- Unlinked state: searchable dropdown -->
+                  <div v-else class="relative">
+                    <input
+                      v-model="valorSearch"
+                      type="text"
+                      placeholder="Search Valor athlete..."
+                      class="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none"
+                      @focus="fetchValorAthletes(); valorDropdownOpen = true"
+                      @blur="setTimeout(() => valorDropdownOpen = false, 200)"
+                    />
+                    <div v-if="valorDropdownOpen" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto overscroll-contain">
+                      <div v-if="valorLoading" class="px-3 py-2 text-sm text-gray-400">Loading Valor athletes...</div>
+                      <button
+                        v-else
+                        v-for="va in filteredValorAthletes" :key="va.ValorID"
+                        @mousedown.prevent="assignValor(va.ValorID, va.Name)"
+                        class="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 active:bg-gray-200 border-b border-gray-50 last:border-0"
+                      >
+                        {{ va.Name }}
+                      </button>
+                      <div v-if="!valorLoading && filteredValorAthletes.length === 0" class="px-3 py-2 text-sm text-gray-400">No unassigned Valor athletes found</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

@@ -77,6 +77,11 @@ const handleLogout = async () => {
           <span v-if="!isCollapsed || mobileOpen">Evaluation Hub</span>
         </router-link>
 
+        <router-link v-if="isStaff()" to="/match-athletes" active-class="bg-gray-800 text-code8-gold border-r-4 border-code8-gold" class="flex items-center gap-3 px-4 py-3 rounded text-base md:text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+          <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
+          <span v-if="!isCollapsed || mobileOpen">Match Athletes</span>
+        </router-link>
+
         <!-- Data Entry section (admin/coach only) -->
         <div v-if="isStaff()" class="pt-4 mt-4 border-t border-gray-700">
           <p class="px-4 mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500" v-if="!isCollapsed || mobileOpen">Testing Stations</p>
