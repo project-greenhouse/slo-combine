@@ -9,6 +9,7 @@ const valorAthletes = ref<{ ValorID: string; Name: string; assigned: boolean }[]
 const valorLoading = ref(false);
 const saving = ref<Record<string, boolean>>({});
 const toast = ref('');
+const syncing = ref(false);
 
 onMounted(async () => {
   athleteStore.fetchRoster();
@@ -24,6 +25,18 @@ const fetchValor = async () => {
     if (data.status === 'success') valorAthletes.value = data.data;
   } catch { /* ignore */ }
   finally { valorLoading.value = false; }
+};
+
+const handleSync = async () => {
+  syncing.value = true;
+  try {
+    await athleteStore.forceRefreshRoster();
+    valorAthletes.value = [];
+    await fetchValor();
+    toast.value = 'Roster and Valor athletes refreshed';
+    setTimeout(() => { toast.value = ''; }, 3000);
+  } catch { /* ignore */ }
+  finally { syncing.value = false; }
 };
 
 const unmatchedRoster = computed(() =>
@@ -109,7 +122,13 @@ const valorNameById = (id: string | null | undefined) => {
 
 <template>
   <div class="max-w-4xl mx-auto">
-    <h1 class="text-2xl md:text-3xl font-bold text-gray-900 mb-2">Athlete Matching</h1>
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
+      <h1 class="text-2xl md:text-3xl font-bold text-gray-900">Athlete Matching</h1>
+      <button @click="handleSync" :disabled="syncing" class="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-code8-dark text-white rounded-lg hover:bg-gray-800 transition-colors disabled:opacity-50">
+        <svg :class="['w-4 h-4', syncing ? 'animate-spin' : '']" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+        {{ syncing ? 'Syncing...' : 'Sync Athletes' }}
+      </button>
+    </div>
     <p class="text-sm text-gray-500 mb-6">Link roster athletes to their Valor profiles. Suggested matches (by name) are shown first.</p>
 
     <div v-if="toast" class="mb-4 p-3 rounded-lg bg-green-100 text-green-800 text-sm font-medium">{{ toast }}</div>

@@ -62,6 +62,12 @@ export const useAthleteStore = defineStore('athlete', () => {
     }
   };
 
+  const forceRefreshRoster = async () => {
+    roster.value = [];
+    metricsCache.value = {};
+    await fetchRoster();
+  };
+
   const selectAthlete = async (athlete: RosterItem) => {
     selectedAthlete.value = athlete;
     await fetchAthleteMetrics(athlete);
@@ -106,6 +112,6 @@ export const useAthleteStore = defineStore('athlete', () => {
 
   return {
     roster, selectedAthlete, loading, error, metrics, metricsLoading,
-    fetchRoster, selectAthlete, fetchAthleteMetrics
+    fetchRoster, forceRefreshRoster, selectAthlete, fetchAthleteMetrics
   };
 });
