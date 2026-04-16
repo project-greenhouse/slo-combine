@@ -610,3 +610,245 @@ def update_athlete_info(req: https_fn.CallableRequest) -> any:
         db.collection("athlete_info").document(uid).set(update_data, merge=True)
         
     return {"status": "success", "message": "Successfully updated athlete info.", "athlete_uid": uid}
+
+
+# ──────────────────────────────────────────────
+# Data entry: Testing station endpoints
+# ──────────────────────────────────────────────
+
+def _require_staff(req):
+    if not req.auth or not req.auth.uid:
+        return None, {"status": "error", "message": "Unauthenticated caller"}
+    caller = firebase_auth.get_user(req.auth.uid)
+    role = caller.custom_claims.get("role") if caller.custom_claims else "athlete"
+    if role not in ["admin", "coach"]:
+        return None, {"status": "error", "message": "Permission denied. Admins or Coaches only."}
+    return req.auth.uid, None
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def submit_standing_reach(req: https_fn.CallableRequest) -> any:
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    athlete_uid = req.data.get("athlete_uid")
+    inches = req.data.get("inches")
+    if not athlete_uid or inches is None:
+        return {"status": "error", "message": "athlete_uid and inches are required."}
+
+    db.collection("standing_reach").document(athlete_uid).set({
+        "athlete_uid": athlete_uid,
+        "StandingReachInches": float(inches),
+        "recorded_by": caller_uid,
+        "recorded_at": firestore.SERVER_TIMESTAMP,
+    }, merge=True)
+
+    return {"status": "success"}
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def get_standing_reach(req: https_fn.CallableRequest) -> any:
+    athlete_uid = req.data.get("athlete_uid")
+    if not athlete_uid:
+        return {"status": "error", "message": "athlete_uid is required."}
+
+    doc = db.collection("standing_reach").document(athlete_uid).get()
+    if doc.exists:
+        return {"status": "success", "inches": doc.to_dict().get("StandingReachInches")}
+    return {"status": "success", "inches": None}
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def submit_vertical_jump(req: https_fn.CallableRequest) -> any:
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    athlete_uid = req.data.get("athlete_uid")
+    max_touch = req.data.get("max_touch_inches")
+    if not athlete_uid or max_touch is None:
+        return {"status": "error", "message": "athlete_uid and max_touch_inches are required."}
+
+    reach_doc = db.collection("standing_reach").document(athlete_uid).get()
+    if not reach_doc.exists:
+        return {"status": "error", "message": "Standing reach not recorded for this athlete. Enter standing reach first."}
+
+    standing_reach = reach_doc.to_dict().get("StandingReachInches")
+    if standing_reach is None:
+        return {"status": "error", "message": "Standing reach value is missing."}
+
+    vert = round(float(max_touch) - float(standing_reach), 1)
+
+    db.collection("standing_vert").add({
+        "athlete_uid": athlete_uid,
+        "MaxTouchInches": float(max_touch),
+        "StandingReachInches": float(standing_reach),
+        "VertInches": vert,
+        "recorded_by": caller_uid,
+        "recorded_at": firestore.SERVER_TIMESTAMP,
+    })
+
+    return {"status": "success", "vert_inches": vert}
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def submit_broad_jump(req: https_fn.CallableRequest) -> any:
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    athlete_uid = req.data.get("athlete_uid")
+    a1 = req.data.get("attempt1")
+    a2 = req.data.get("attempt2")
+    if not athlete_uid or (a1 is None and a2 is None):
+        return {"status": "error", "message": "athlete_uid and at least one attempt are required."}
+
+    vals = [v for v in [a1, a2] if v is not None]
+    best = max(vals)
+
+    db.collection("broad_jump").add({
+        "athlete_uid": athlete_uid,
+        "Attempt1Inches": float(a1) if a1 is not None else None,
+        "Attempt2Inches": float(a2) if a2 is not None else None,
+        "BestInches": float(best),
+        "recorded_by": caller_uid,
+        "recorded_at": firestore.SERVER_TIMESTAMP,
+    })
+
+    return {"status": "success", "best_inches": float(best)}
+
+
+# ──────────────────────────────────────────────
+# Bookeo sync
+# ──────────────────────────────────────────────
+
+@https_fn.on_call(memory=options.MemoryOption.GB_1, timeout_sec=300, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def sync_bookeo_roster(req: https_fn.CallableRequest) -> any:
+    """Pull athletes from Bookeo bookings, upsert into athlete_info, cross-ref HD and Valor."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+    caller = firebase_auth.get_user(caller_uid)
+    if (caller.custom_claims or {}).get("role") != "admin":
+        return {"status": "error", "message": "Admin only."}
+
+    from func_bookeo import get_bookings, extract_athletes, normalize_name
+
+    product_id = os.environ.get("BOOKEO_PRODUCT_ID", "").strip().strip("\"'")
+    start_time = req.data.get("start_time", "2026-05-09T01:00:00-07:00")
+    end_time = req.data.get("end_time", "2026-05-09T23:00:00-07:00")
+
+    bookings = get_bookings(product_id, start_time, end_time)
+    bookeo_athletes = extract_athletes(bookings)
+
+    # Load existing athlete_info keyed on bookeo_person_id and by normalized name
+    existing_docs = list(db.collection("athlete_info").stream())
+    existing_by_bookeo_id = {}
+    existing_by_norm_name = {}
+    for doc in existing_docs:
+        d = doc.to_dict()
+        d["_doc_id"] = doc.id
+        bpid = d.get("bookeo_person_id")
+        if bpid:
+            existing_by_bookeo_id[bpid] = d
+        name = d.get("Name", "")
+        if name:
+            existing_by_norm_name[normalize_name(name)] = d
+
+    # Load HD roster for cross-ref
+    hd_by_norm_name = {}
+    try:
+        hd_token = os.environ.get("HD_TOKEN", "").strip().strip("\"'")
+        if hd_token:
+            AuthManager(authMethod="manual", refreshToken=hd_token)
+            hd_df = GetAthletes()
+            if not hd_df.empty and "name" in hd_df.columns:
+                for _, row in hd_df.iterrows():
+                    hd_by_norm_name[normalize_name(str(row["name"]))] = str(row["id"])
+    except Exception as e:
+        print(f"HD roster fetch failed during sync: {e}")
+
+    # Load Valor roster for cross-ref
+    valor_by_norm_name = {}
+    try:
+        jwt = get_jwt_token()
+        valor_url = os.environ.get("VALOR_URL", "").strip().strip("\"'")
+        if jwt and valor_url:
+            resp = requests.get(f"{valor_url}/athletes", headers={"Authorization": f"Bearer {jwt}"}, timeout=30)
+            if resp.status_code == 200:
+                for a in resp.json():
+                    fn = (a.get("FirstName") or "").strip()
+                    ln = (a.get("LastName") or "").strip()
+                    aid = str(a.get("AthleteId") or a.get("Id") or "")
+                    if fn or ln:
+                        valor_by_norm_name[normalize_name(f"{fn} {ln}")] = aid
+    except Exception as e:
+        print(f"Valor roster fetch failed during sync: {e}")
+
+    results = {"created": 0, "matched": 0, "missing_valor": [], "missing_hd": [], "errors": []}
+
+    for athlete in bookeo_athletes:
+        try:
+            bpid = athlete["bookeo_person_id"]
+            norm = normalize_name(athlete["Name"])
+
+            # Determine Firestore doc to upsert
+            existing = existing_by_bookeo_id.get(bpid) or existing_by_norm_name.get(norm)
+
+            # Cross-ref HD
+            hd_id = hd_by_norm_name.get(norm)
+            # Cross-ref Valor
+            valor_id = valor_by_norm_name.get(norm)
+
+            sync_status = {}
+            if hd_id:
+                sync_status["hd"] = "present"
+            else:
+                sync_status["hd"] = "missing"
+                results["missing_hd"].append(athlete["Name"])
+            if valor_id:
+                sync_status["valor"] = "present"
+            else:
+                sync_status["valor"] = "missing"
+                results["missing_valor"].append(athlete["Name"])
+
+            doc_data = {
+                "bookeo_person_id": bpid,
+                "bookeo_customer_id": athlete.get("bookeo_customer_id"),
+                "Name": athlete["Name"],
+                "Email": athlete.get("Email"),
+                "BirthDate": athlete.get("BirthDate"),
+                "Gender": athlete.get("Gender"),
+                "HeightInches": athlete.get("HeightInches"),
+                "CurrentSchool": athlete.get("CurrentSchool"),
+                "Sports": athlete.get("Sports"),
+                "Positions": athlete.get("Positions"),
+                "GradYear": athlete.get("GradYear"),
+                "sync_status": sync_status,
+            }
+            if hd_id:
+                doc_data["HawkinID"] = hd_id
+            if valor_id:
+                doc_data["ValorID"] = valor_id
+
+            # Remove None values so merge doesn't overwrite with null
+            doc_data = {k: v for k, v in doc_data.items() if v is not None}
+
+            if existing:
+                doc_id = existing["_doc_id"]
+                db.collection("athlete_info").document(doc_id).set(doc_data, merge=True)
+                results["matched"] += 1
+            else:
+                db.collection("athlete_info").add(doc_data)
+                results["created"] += 1
+
+        except Exception as e:
+            results["errors"].append(f"{athlete.get('Name', '?')}: {str(e)}")
+
+    return {"status": "success", **results}

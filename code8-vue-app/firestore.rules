@@ -2,13 +2,31 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper function to check for authorized roles
     function isAdminOrCoach() {
       return request.auth != null && (request.auth.token.role == 'admin' || request.auth.token.role == 'coach');
     }
 
-    // Specifically target the athlete_summaries collection
     match /athlete_summaries/{summaryId} {
+      allow read: if true;
+      allow write: if isAdminOrCoach();
+    }
+
+    match /standing_reach/{athleteUid} {
+      allow read: if true;
+      allow write: if isAdminOrCoach();
+    }
+
+    match /standing_vert/{docId} {
+      allow read: if true;
+      allow write: if isAdminOrCoach();
+    }
+
+    match /broad_jump/{docId} {
+      allow read: if true;
+      allow write: if isAdminOrCoach();
+    }
+
+    match /athlete_info/{docId} {
       allow read: if true;
       allow write: if isAdminOrCoach();
     }

@@ -77,8 +77,21 @@ Hosting serves `code8-vue-app/dist/` with SPA rewrite to `index.html`.
 
 - **Application Id:** `YRALT4TH7NPU`
 - **Secret Key:** `aaHWtJwuVkvTey2cc1wviAercth68Asg`
+- **API Key:** `A397HJ9EPYRALT4TH7NPU41553ERWJH719C637CA92D`
 - **Authorization URL:** https://signin.bookeo.com/?authappid=YRALT4TH7NPU&permissions=customers_rw_all,bookings_rw_all,blocks_rwd_all,availability_r
 
+### SLO County Combine Bookeo Data
+
+All URIs are relative to https://api.bookeo.com/v2
+All requests must provide a `secretKey` and an `apiKey` as parameters
+
+Example request for all Code8 Bookeo products: `https://api.bookeo.com/v2/settings/products?apiKey=A397HJ9EPYRALT4TH7NPU41553ERWJH719C637CA92D&secretKey=aaHWtJwuVkvTey2cc1wviAercth68Asg`
+
+The SLO County Combine is product:
+- **productId**: '415536EXT7W19C6381813B',
+- **productCode**: '415536EXT7W19C6381813B',
+
+SLO Combine Bookings Request: `https://api.bookeo.com/v2/bookings?productId=415536EXT7W19C6381813B&startTime=2026-05-09T01:00:00-07:00&endTime=2026-05-09T23:00:00-07:00&apiKey=A397HJ9EPYRALT4TH7NPU41553ERWJH719C637CA92D&secretKey=aaHWtJwuVkvTey2cc1wviAercth68Asg`
 ## Repo layout
 
 ```

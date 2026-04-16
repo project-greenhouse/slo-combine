@@ -5,6 +5,9 @@ import EvaluationHubView from '../views/EvaluationHubView.vue';
 import PresentationView from '../views/PresentationView.vue';
 import LoginView from '../views/LoginView.vue';
 import AdminView from '../views/AdminView.vue';
+import StandingReachEntry from '../views/entry/StandingReachEntry.vue';
+import VerticalJumpEntry from '../views/entry/VerticalJumpEntry.vue';
+import BroadJumpEntry from '../views/entry/BroadJumpEntry.vue';
 import { auth } from '../firebase/config';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 
@@ -34,6 +37,24 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/entry/standing-reach',
+      name: 'standing-reach',
+      component: StandingReachEntry,
+      meta: { requiresAuth: true, requiresStaff: true }
+    },
+    {
+      path: '/entry/vertical',
+      name: 'vertical-jump',
+      component: VerticalJumpEntry,
+      meta: { requiresAuth: true, requiresStaff: true }
+    },
+    {
+      path: '/entry/broad-jump',
+      name: 'broad-jump',
+      component: BroadJumpEntry,
+      meta: { requiresAuth: true, requiresStaff: true }
+    },
+    {
       path: '/admin',
       name: 'admin',
       component: AdminView,
@@ -60,6 +81,7 @@ const getCurrentUser = (): Promise<User | null> => {
 router.beforeEach(async (to, _from, next) => {
   const requiresAuth = to.matched.some(record => record.meta.requiresAuth);
   const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin);
+  const requiresStaff = to.matched.some(record => record.meta.requiresStaff);
   let currentUser = null;
   
   try {
@@ -76,6 +98,7 @@ router.beforeEach(async (to, _from, next) => {
     
     if (to.name === 'login') next(role === 'athlete' ? '/presentation' : '/dashboard');
     else if (requiresAdmin && role !== 'admin') next('/dashboard');
+    else if (requiresStaff && role !== 'admin' && role !== 'coach') next('/presentation');
     else if (role === 'athlete' && (to.name === 'dashboard' || to.name === 'evaluation')) next('/presentation');
     else next();
   } else {
