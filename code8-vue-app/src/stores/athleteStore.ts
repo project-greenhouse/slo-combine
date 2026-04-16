@@ -62,6 +62,12 @@ export const useAthleteStore = defineStore('athlete', () => {
     }
   };
 
+  const forceRefreshRoster = async () => {
+    roster.value = [];
+    metricsCache.value = {};
+    await fetchRoster();
+  };
+
   const selectAthlete = async (athlete: RosterItem) => {
     selectedAthlete.value = athlete;
     await fetchAthleteMetrics(athlete);
@@ -84,7 +90,7 @@ export const useAthleteStore = defineStore('athlete', () => {
     
     try {
       const getMetrics = httpsCallable(functions, 'get_athlete_metrics');
-      const result = await getMetrics({ athlete_uid: athlete.athlete_uid, Name: athlete.Name, ValorID: athlete.ValorID });
+      const result = await getMetrics({ athlete_uid: athlete.athlete_uid, Name: athlete.Name, HawkinID: athlete.HawkinID, ValorID: athlete.ValorID });
       const responseData = result.data as any;
       
       // Only update state if this is still the active athlete requested (prevents ghosting!)
@@ -106,6 +112,6 @@ export const useAthleteStore = defineStore('athlete', () => {
 
   return {
     roster, selectedAthlete, loading, error, metrics, metricsLoading,
-    fetchRoster, selectAthlete, fetchAthleteMetrics
+    fetchRoster, forceRefreshRoster, selectAthlete, fetchAthleteMetrics
   };
 });

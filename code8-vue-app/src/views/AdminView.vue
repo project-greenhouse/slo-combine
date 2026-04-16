@@ -42,6 +42,31 @@ const csvStatusMsg = ref('');
 const csvIsError = ref(false);
 const csvIsLoading = ref(false);
 
+// Bookeo Sync State
+const bookeoSyncing = ref(false);
+const bookeoResult = ref<any>(null);
+const bookeoError = ref('');
+
+const handleBookeoSync = async () => {
+  bookeoSyncing.value = true;
+  bookeoResult.value = null;
+  bookeoError.value = '';
+  try {
+    const syncFn = httpsCallable(functions, 'sync_bookeo_roster');
+    const result = await syncFn({});
+    const data = result.data as any;
+    if (data.status === 'success') {
+      bookeoResult.value = data;
+    } else {
+      bookeoError.value = data.message || 'Sync failed';
+    }
+  } catch (err: any) {
+    bookeoError.value = err.message || 'Sync failed';
+  } finally {
+    bookeoSyncing.value = false;
+  }
+};
+
 const setUserRole = async () => {
   if (!targetEmail.value) return;
   
@@ -302,6 +327,55 @@ const handleCsvUpload = async () => {
           <span v-if="csvIsLoading" class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span><span v-else>Upload Roster</span>
         </button>
       </form>
+    </div>
+
+    <!-- Bookeo Sync -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mt-8">
+      <h2 class="text-xl font-bold text-gray-900 mb-2">Sync from Bookeo</h2>
+      <p class="text-sm text-gray-500 mb-6 pb-4 border-b border-gray-100">
+        Pull registered athletes from Bookeo and sync into the roster. Cross-references Hawkin Dynamics and Valor to identify missing athletes.
+      </p>
+
+      <button @click="handleBookeoSync" :disabled="bookeoSyncing" class="w-full bg-code8-gold text-white font-bold text-base px-4 py-3 rounded-lg hover:bg-yellow-600 transition-all flex justify-center items-center disabled:opacity-50">
+        <span v-if="bookeoSyncing" class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
+        {{ bookeoSyncing ? 'Syncing...' : 'Sync Bookeo Roster' }}
+      </button>
+
+      <div v-if="bookeoError" class="mt-4 text-sm font-medium p-3 rounded-lg bg-red-50 text-red-600 border border-red-100">{{ bookeoError }}</div>
+
+      <div v-if="bookeoResult" class="mt-4 space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="p-3 rounded-lg bg-green-50 border border-green-200 text-center">
+            <p class="text-2xl font-bold text-green-700">{{ bookeoResult.created }}</p>
+            <p class="text-xs text-green-600">New Athletes</p>
+          </div>
+          <div class="p-3 rounded-lg bg-blue-50 border border-blue-200 text-center">
+            <p class="text-2xl font-bold text-blue-700">{{ bookeoResult.matched }}</p>
+            <p class="text-xs text-blue-600">Updated Existing</p>
+          </div>
+        </div>
+
+        <div v-if="bookeoResult.missing_valor?.length" class="p-4 rounded-lg bg-yellow-50 border border-yellow-200">
+          <p class="text-sm font-semibold text-yellow-800 mb-2">Missing in Valor (create manually):</p>
+          <ul class="text-sm text-yellow-700 space-y-1">
+            <li v-for="name in bookeoResult.missing_valor" :key="name">{{ name }}</li>
+          </ul>
+        </div>
+
+        <div v-if="bookeoResult.missing_hd?.length" class="p-4 rounded-lg bg-orange-50 border border-orange-200">
+          <p class="text-sm font-semibold text-orange-800 mb-2">Missing in Hawkin Dynamics:</p>
+          <ul class="text-sm text-orange-700 space-y-1">
+            <li v-for="name in bookeoResult.missing_hd" :key="name">{{ name }}</li>
+          </ul>
+        </div>
+
+        <div v-if="bookeoResult.errors?.length" class="p-4 rounded-lg bg-red-50 border border-red-200">
+          <p class="text-sm font-semibold text-red-800 mb-2">Errors:</p>
+          <ul class="text-sm text-red-700 space-y-1">
+            <li v-for="e in bookeoResult.errors" :key="e">{{ e }}</li>
+          </ul>
+        </div>
+      </div>
     </div>
 
     <!-- Add Athlete Modal -->

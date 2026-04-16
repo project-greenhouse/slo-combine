@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 
@@ -24,5 +24,5 @@ export const functions = getFunctions(app);
 // Connect to the local emulator when running in development mode
 if (import.meta.env.DEV && isNewApp) {
   connectFunctionsEmulator(functions, "localhost", 5001);
-  // connectAuthEmulator(auth, "http://localhost:9099", { disableWarnings: true });
+  connectAuthEmulator(auth, "http://localhost:9099", { disableWarnings: true });
 }
