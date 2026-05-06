@@ -1,12 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import HomeView from '../views/HomeView.vue';
 import DashboardView from '../views/DashboardView.vue';
-import RosterView from '../views/RosterView.vue';
+import AthletesView from '../views/AthletesView.vue';
 import EvaluationHubView from '../views/EvaluationHubView.vue';
 import PresentationView from '../views/PresentationView.vue';
 import LoginView from '../views/LoginView.vue';
 import AdminView from '../views/AdminView.vue';
-import ManageAthletesView from '../views/ManageAthletesView.vue';
 import TestingView from '../views/TestingView.vue';
 import { auth } from '../firebase/config';
 import { onAuthStateChanged, type User } from 'firebase/auth';
@@ -26,9 +25,9 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      path: '/roster',
-      name: 'roster',
-      component: RosterView,
+      path: '/athletes',
+      name: 'athletes',
+      component: AthletesView,
       meta: { requiresAuth: true }
     },
     {
@@ -46,12 +45,6 @@ const router = createRouter({
       path: '/testing',
       name: 'testing',
       component: TestingView,
-      meta: { requiresAuth: true, requiresStaff: true }
-    },
-    {
-      path: '/manage-athletes',
-      name: 'manage-athletes',
-      component: ManageAthletesView,
       meta: { requiresAuth: true, requiresStaff: true }
     },
     {
@@ -98,7 +91,7 @@ router.beforeEach(async (to, _from, next) => {
     if (to.name === 'login') next(role === 'athlete' ? '/presentation' : '/dashboard');
     else if (requiresAdmin && role !== 'admin') next('/dashboard');
     else if (requiresStaff && role !== 'admin' && role !== 'coach') next('/presentation');
-    else if (role === 'athlete' && (to.name === 'dashboard' || to.name === 'evaluation' || to.name === 'roster')) next('/presentation');
+    else if (role === 'athlete' && (to.name === 'dashboard' || to.name === 'evaluation' || to.name === 'athletes')) next('/presentation');
     else next();
   } else {
     next();
