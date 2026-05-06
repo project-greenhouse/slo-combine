@@ -89,6 +89,7 @@ function suggestedMatch(athlete: RosterItem) {
 }
 
 const openDropdown = ref<string | null>(null);
+const closeDrop = () => { setTimeout(() => { openDropdown.value = null; }, 200); };
 const searchTerms = ref<Record<string, string>>({});
 const filteredValorFor = (uid: string) => {
   const q = (searchTerms.value[uid] || '').toLowerCase();
@@ -364,7 +365,7 @@ const handleCsvUpload = async () => {
                 </button>
               </div>
               <div v-else-if="!saving[athlete.athlete_uid!]" class="relative">
-                <input v-model="searchTerms[athlete.athlete_uid!]" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-md px-2 py-1.5 text-xs focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none" @focus="openDropdown = athlete.athlete_uid!" @blur="setTimeout(() => { if (openDropdown === athlete.athlete_uid) openDropdown = null; }, 200)" />
+                <input v-model="searchTerms[athlete.athlete_uid!]" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-md px-2 py-1.5 text-xs focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none" @focus="openDropdown = athlete.athlete_uid!" @blur="closeDrop" />
                 <div v-if="openDropdown === athlete.athlete_uid" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto overscroll-contain">
                   <button v-for="va in filteredValorFor(athlete.athlete_uid!)" :key="va.ValorID" @mousedown.prevent="assign(athlete, va.ValorID, va.Name)" class="w-full text-left px-2 py-1.5 text-xs hover:bg-gray-100 border-b border-gray-50 last:border-0">{{ va.Name }}</button>
                   <div v-if="filteredValorFor(athlete.athlete_uid!).length === 0" class="px-2 py-1.5 text-xs text-gray-400">No matches</div>

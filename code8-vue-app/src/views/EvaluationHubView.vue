@@ -11,6 +11,7 @@ import PresentationView from './PresentationView.vue';
 const store = useAthleteStore();
 const authStore = useAuthStore();
 const showReportCard = ref(false);
+const handlePrint = () => { window.print(); };
 
 onMounted(() => {
   store.fetchRoster();
@@ -476,7 +477,7 @@ const formatDate = (timestamp: any) => {
       <div class="flex items-center justify-between p-3 bg-code8-dark text-white flex-shrink-0 print:hidden">
         <h2 class="font-bold text-sm">{{ store.selectedAthlete?.Name }} — Report Card</h2>
         <div class="flex items-center gap-2">
-          <button @click="window.print()" class="px-3 py-1 text-xs font-semibold bg-white/10 hover:bg-white/20 rounded-md">Print</button>
+          <button @click="handlePrint" class="px-3 py-1 text-xs font-semibold bg-white/10 hover:bg-white/20 rounded-md">Print</button>
           <button @click="showReportCard = false" class="p-1 text-gray-400 hover:text-white">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
           </button>

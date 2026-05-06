@@ -101,6 +101,7 @@ const valorAthletes = ref<{ ValorID: string; Name: string; assigned: boolean }[]
 const valorLoading = ref(false);
 const valorSearch = ref('');
 const valorDropdownOpen = ref(false);
+const closeValorDrop = () => { setTimeout(() => { valorDropdownOpen.value = false; }, 200); };
 const valorSaving = ref(false);
 const valorToast = ref('');
 
@@ -389,7 +390,7 @@ const saveAthleteInfo = async () => {
                       placeholder="Search Valor athlete..."
                       class="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none"
                       @focus="fetchValorAthletes(); valorDropdownOpen = true"
-                      @blur="setTimeout(() => valorDropdownOpen = false, 200)"
+                      @blur="closeValorDrop"
                     />
                     <div v-if="valorDropdownOpen" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto overscroll-contain">
                       <div v-if="valorLoading" class="px-3 py-2 text-sm text-gray-400">Loading Valor athletes...</div>

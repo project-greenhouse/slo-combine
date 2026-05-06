@@ -80,6 +80,9 @@ const filteredValorAthletes = computed(() => {
   return q ? list.filter(a => a.Name.toLowerCase().includes(q)) : list;
 });
 
+const closeValorDrop = () => { setTimeout(() => { valorDropdownOpen.value = false; }, 200); };
+const closeManageDrop = () => { setTimeout(() => { openManageDropdown.value = null; }, 200); };
+
 const fetchValor = async () => {
   valorLoading.value = true;
   try { const res = await httpsCallable(functions, 'get_valor_athletes')({}); const d = (res.data as any); if (d.status === 'success') valorAthletes.value = d.data; } catch {}
@@ -312,7 +315,7 @@ const handleCsvUpload = async () => {
                         <button @click="unlinkValor" :disabled="valorSaving" class="text-xs text-red-500 hover:text-red-700 font-medium">{{ valorSaving ? '...' : 'Unlink' }}</button>
                       </div>
                       <div v-else class="relative">
-                        <input v-model="valorSearch" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none" @focus="fetchValor(); valorDropdownOpen = true" @blur="setTimeout(() => valorDropdownOpen = false, 200)" />
+                        <input v-model="valorSearch" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none" @focus="fetchValor(); valorDropdownOpen = true" @blur="closeValorDrop" />
                         <div v-if="valorDropdownOpen" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto overscroll-contain">
                           <div v-if="valorLoading" class="px-3 py-2 text-sm text-gray-400">Loading...</div>
                           <button v-else v-for="va in filteredValorAthletes" :key="va.ValorID" @mousedown.prevent="assignValor(va.ValorID, va.Name)" class="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 border-b border-gray-50 last:border-0">{{ va.Name }}</button>
@@ -399,7 +402,7 @@ const handleCsvUpload = async () => {
                         <button @click="openManageDropdown = athlete.athlete_uid!" class="p-1 text-gray-400 hover:text-gray-600"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg></button>
                       </div>
                       <div v-else-if="!manageSaving[athlete.athlete_uid!]" class="relative">
-                        <input v-model="manageSearchTerms[athlete.athlete_uid!]" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-md px-2 py-1 text-xs focus:border-code8-gold outline-none" @focus="openManageDropdown = athlete.athlete_uid!" @blur="setTimeout(() => { if (openManageDropdown === athlete.athlete_uid) openManageDropdown = null; }, 200)" />
+                        <input v-model="manageSearchTerms[athlete.athlete_uid!]" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-md px-2 py-1 text-xs focus:border-code8-gold outline-none" @focus="openManageDropdown = athlete.athlete_uid!" @blur="closeManageDrop" />
                         <div v-if="openManageDropdown === athlete.athlete_uid" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-36 overflow-y-auto overscroll-contain">
                           <button v-for="va in filteredValorFor(athlete.athlete_uid!)" :key="va.ValorID" @mousedown.prevent="manageAssign(athlete, va.ValorID, va.Name)" class="w-full text-left px-2 py-1.5 text-xs hover:bg-gray-100 border-b border-gray-50 last:border-0">{{ va.Name }}</button>
                           <div v-if="filteredValorFor(athlete.athlete_uid!).length === 0" class="px-2 py-1.5 text-xs text-gray-400">No matches</div>

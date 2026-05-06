@@ -62,6 +62,7 @@ function suggestedMatch(athlete: RosterItem) {
 
 // Per-athlete dropdown state
 const openDropdown = ref<string | null>(null);
+const closeDrop = () => { setTimeout(() => { openDropdown.value = null; }, 200); };
 const searchTerms = ref<Record<string, string>>({});
 
 const filteredValorFor = (uid: string) => {
@@ -194,7 +195,7 @@ const valorNameById = (id: string | null | undefined) => {
                   placeholder="Search Valor..."
                   class="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none"
                   @focus="openDropdown = athlete.athlete_uid!"
-                  @blur="setTimeout(() => { if (openDropdown === athlete.athlete_uid) openDropdown = null; }, 200)"
+                  @blur="closeDrop"
                 />
                 <div v-if="openDropdown === athlete.athlete_uid" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto overscroll-contain">
                   <button
