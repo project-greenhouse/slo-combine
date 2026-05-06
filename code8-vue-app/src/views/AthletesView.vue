@@ -137,9 +137,10 @@ const manageSearchTerms = ref<Record<string, string>>({});
 
 function normalize(name: string): string { return name.toLowerCase().replace(/[.\-']/g, '').replace(/\s+/g, ' ').trim(); }
 
-const fullySynced = computed(() => store.roster.filter(a => a.athlete_uid && a.HawkinID && a.ValorID));
+const fullySynced = computed(() => store.roster.filter(a => a.athlete_uid && a.HawkinID && a.ValorID && a.SwiftID));
 const missingHD = computed(() => store.roster.filter(a => a.athlete_uid && !a.HawkinID));
 const missingValor = computed(() => store.roster.filter(a => a.athlete_uid && !a.ValorID));
+const missingSwift = computed(() => store.roster.filter(a => a.athlete_uid && !a.SwiftID));
 const availableValor = computed(() => valorAthletes.value.filter(v => !v.assigned));
 
 function suggestedValorMatch(athlete: RosterItem) {
@@ -248,6 +249,7 @@ const handleCsvUpload = async () => {
               <div class="flex gap-1 flex-shrink-0">
                 <span :class="athlete.HawkinID ? 'text-green-500' : 'text-gray-300'" title="Hawkin Dynamics">HD</span>
                 <span :class="athlete.ValorID ? 'text-green-500' : 'text-gray-300'" title="Valor">V</span>
+                <span :class="athlete.SwiftID ? 'text-green-500' : 'text-gray-300'" title="Swift">S</span>
               </div>
             </div>
           </button>
@@ -409,7 +411,16 @@ const handleCsvUpload = async () => {
                 </div>
               </div>
 
-              <div v-if="!missingHD.length && !missingValor.length && fullySynced.length" class="text-center py-6 text-green-600 font-semibold text-sm">All athletes are fully synced across all sources.</div>
+              <!-- Missing Swift -->
+              <div v-if="missingSwift.length" class="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                <h3 class="text-sm font-bold text-gray-700 mb-2">Missing in Swift ({{ missingSwift.length }})</h3>
+                <p class="text-xs text-gray-500 mb-3">These athletes have no Swift timing data yet. Upload a Swift CSV from the Testing page to auto-link.</p>
+                <div class="space-y-1">
+                  <div v-for="a in missingSwift" :key="a.athlete_uid!" class="text-sm text-gray-700 px-3 py-1.5 bg-gray-100/50 rounded">{{ a.Name }}</div>
+                </div>
+              </div>
+
+              <div v-if="!missingHD.length && !missingValor.length && !missingSwift.length && fullySynced.length" class="text-center py-6 text-green-600 font-semibold text-sm">All athletes are fully synced across all sources.</div>
             </div>
           </template>
         </div>

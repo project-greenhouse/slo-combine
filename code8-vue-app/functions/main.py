@@ -212,6 +212,7 @@ def get_roster(req: https_fn.CallableRequest) -> any:
             "athlete_uid": uid,
             "HawkinID": hid if hid and hid in hd_by_id else a.get("HawkinID"),
             "ValorID": vid if vid and vid in valor_by_id else a.get("ValorID"),
+            "SwiftID": a.get("SwiftID"),
             "SprintID": uid if uid in sprint_uids else None,
             "ProAgilID": uid if uid in proagil_uids else None,
             "Email": a.get("Email") or a.get("email"),
@@ -557,6 +558,141 @@ def upload_roster_csv(req: https_fn.CallableRequest) -> any:
     except Exception as e:
         return {"status": "error", "message": f"Failed to parse or upload CSV: {str(e)}"}
 
+@https_fn.on_call(memory=options.MemoryOption.GB_1, timeout_sec=300, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def upload_swift_csv(req: https_fn.CallableRequest) -> any:
+    """Parse a Swift timing CSV and write splits to sprint40/pro_agility collections."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    csv_text = req.data.get("csv_data")
+    if not csv_text:
+        return {"status": "error", "message": "No CSV data provided."}
+
+    try:
+        df = pd.read_csv(io.StringIO(csv_text))
+        df = df.where(pd.notnull(df), None)
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to parse CSV: {str(e)}"}
+
+    # Normalize column names (Swift CSV has typo "AcitivityTitle")
+    col_map = {}
+    for c in df.columns:
+        if c.lower().replace(" ", "") in ["acitivitytitle", "activitytitle"]:
+            col_map[c] = "ActivityTitle"
+    if col_map:
+        df = df.rename(columns=col_map)
+
+    required_cols = {"AthleteId", "FirstName", "LastName", "ActivityTitle", "ActivityIdentifier",
+                     "ActivityTimestamp", "Sequence", "Total", "Split", "Distance", "Velocity"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        return {"status": "error", "message": f"Missing columns: {', '.join(missing)}"}
+
+    # Map ActivityTitle to Firestore collection
+    TITLE_MAP = {
+        "SLO CC 10 + 30": "sprint40",
+        "Pro Shuttle Steady": "pro_agility",
+    }
+
+    # Build Swift athlete lookup: SwiftID -> athlete_uid from athlete_info
+    athlete_docs = list(db.collection("athlete_info").stream())
+    swift_to_uid = {}   # SwiftID -> athlete_uid
+    name_to_uid = {}    # normalized "first last" -> (athlete_uid, doc_id)
+    for doc in athlete_docs:
+        d = doc.to_dict()
+        uid = doc.id
+        if d.get("SwiftID"):
+            swift_to_uid[str(d["SwiftID"])] = uid
+        name = (d.get("Name") or "").strip().lower()
+        if name:
+            name_to_uid[name] = uid
+
+    batch = db.batch()
+    count = 0
+    skipped = 0
+    unmatched_athletes = set()
+    new_swift_links = {}  # athlete_uid -> SwiftID (to update athlete_info)
+
+    for _, row in df.iterrows():
+        title = str(row.get("ActivityTitle") or "").strip()
+        collection_name = TITLE_MAP.get(title)
+        if not collection_name:
+            skipped += 1
+            continue
+
+        # Skip Sequence=0 rows (initialization with all zeros)
+        seq = row.get("Sequence")
+        if seq is not None and (seq == 0 or str(seq) == "0"):
+            continue
+
+        swift_id = str(row.get("AthleteId") or "").strip()
+        first = str(row.get("FirstName") or "").strip()
+        middle = str(row.get("MiddleName") or "").strip()
+        last = str(row.get("LastName") or "").strip()
+        full_name = f"{first} {last}".strip()
+
+        # Resolve athlete_uid: FK first, then name match
+        athlete_uid = swift_to_uid.get(swift_id)
+        if not athlete_uid:
+            athlete_uid = name_to_uid.get(full_name.lower())
+        if not athlete_uid:
+            # Try with middle name
+            full_with_middle = f"{first} {middle} {last}".strip() if middle else ""
+            if full_with_middle:
+                athlete_uid = name_to_uid.get(full_with_middle.lower())
+
+        if not athlete_uid:
+            unmatched_athletes.add(full_name)
+            continue
+
+        # Track new Swift ID links
+        if swift_id and swift_id not in swift_to_uid:
+            swift_to_uid[swift_id] = athlete_uid
+            new_swift_links[athlete_uid] = swift_id
+
+        doc_data = {
+            "athlete_uid": athlete_uid,
+            "Name": full_name,
+            "SwiftID": swift_id,
+            "ActivityIdentifier": str(row.get("ActivityIdentifier") or ""),
+            "ActivityTimestamp": str(row.get("ActivityTimestamp") or ""),
+            "Sequence": int(row["Sequence"]) if row.get("Sequence") is not None else None,
+            "Total": float(row["Total"]) if row.get("Total") is not None else None,
+            "Split": float(row["Split"]) if row.get("Split") is not None else None,
+            "Distance": float(row["Distance"]) if row.get("Distance") is not None else None,
+            "Velocity": float(row["Velocity"]) if row.get("Velocity") is not None else None,
+        }
+
+        doc_ref = db.collection(collection_name).document()
+        batch.set(doc_ref, doc_data)
+        count += 1
+
+        if count % 400 == 0:
+            batch.commit()
+            batch = db.batch()
+
+    # Save new Swift ID links to athlete_info
+    for uid, sid in new_swift_links.items():
+        batch.update(db.collection("athlete_info").document(uid), {"SwiftID": sid})
+
+    batch.commit()
+
+    result = {
+        "status": "success",
+        "message": f"Imported {count} split records.",
+        "imported": count,
+        "skipped_unknown_activity": skipped,
+        "new_swift_links": len(new_swift_links),
+    }
+    if unmatched_athletes:
+        result["unmatched_athletes"] = sorted(list(unmatched_athletes))
+        result["message"] += f" {len(unmatched_athletes)} athlete(s) could not be matched."
+
+    return result
+
+
 @https_fn.on_call(memory=options.MemoryOption.GB_1, timeout_sec=120, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
 @safe_execute
 def update_athlete_info(req: https_fn.CallableRequest) -> any:
@@ -573,7 +709,7 @@ def update_athlete_info(req: https_fn.CallableRequest) -> any:
     uid = data.get("athlete_uid")
     
     update_data = {}
-    for key in ["Name", "Email", "BirthDate", "Gender", "GradYear", "SchoolGrade", "HeightInches", "LimbDominance", "Sports", "Positions", "CurrentSchool", "ValorID", "HawkinID"]:
+    for key in ["Name", "Email", "BirthDate", "Gender", "GradYear", "SchoolGrade", "HeightInches", "LimbDominance", "Sports", "Positions", "CurrentSchool", "ValorID", "HawkinID", "SwiftID"]:
         if key in data:
             update_data[key] = data[key]
             

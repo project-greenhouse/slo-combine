@@ -9,7 +9,8 @@ export interface RosterItem {
   SprintID: string | null;
   ProAgilID: string | null;
   ValorID: string | null;
-  athlete_uid?: string | null; // Future-proofing for when we pull the DB UUID
+  SwiftID?: string | null;
+  athlete_uid?: string | null;
   Email?: string | null;
   BirthDate?: string | null;
   Gender?: string | null;
