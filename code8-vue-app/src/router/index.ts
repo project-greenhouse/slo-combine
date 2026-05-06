@@ -2,6 +2,9 @@ import { createRouter, createWebHistory } from 'vue-router';
 import HomeView from '../views/HomeView.vue';
 import DashboardView from '../views/DashboardView.vue';
 import AthletesView from '../views/AthletesView.vue';
+import StandingReachEntry from '../views/entry/StandingReachEntry.vue';
+import VerticalJumpEntry from '../views/entry/VerticalJumpEntry.vue';
+import BroadJumpEntry from '../views/entry/BroadJumpEntry.vue';
 import EvaluationHubView from '../views/EvaluationHubView.vue';
 import PresentationView from '../views/PresentationView.vue';
 import LoginView from '../views/LoginView.vue';
@@ -51,6 +54,24 @@ const router = createRouter({
       path: '/testing',
       name: 'testing',
       component: TestingView,
+      meta: { requiresAuth: true, requiresStaff: true }
+    },
+    {
+      path: '/testing/standing-reach',
+      name: 'standing-reach',
+      component: StandingReachEntry,
+      meta: { requiresAuth: true, requiresStaff: true }
+    },
+    {
+      path: '/testing/vertical',
+      name: 'vertical-jump',
+      component: VerticalJumpEntry,
+      meta: { requiresAuth: true, requiresStaff: true }
+    },
+    {
+      path: '/testing/broad-jump',
+      name: 'broad-jump',
+      component: BroadJumpEntry,
       meta: { requiresAuth: true, requiresStaff: true }
     },
     {
