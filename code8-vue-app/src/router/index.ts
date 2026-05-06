@@ -31,9 +31,15 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      path: '/presentation',
-      name: 'presentation',
+      path: '/report-card',
+      name: 'report-card',
       component: PresentationView
+    },
+    {
+      path: '/profile',
+      name: 'athlete-profile',
+      component: () => import('../views/AthleteProfileView.vue'),
+      meta: { requiresAuth: true }
     },
     {
       path: '/evaluation',
@@ -88,10 +94,10 @@ router.beforeEach(async (to, _from, next) => {
     const token = await currentUser.getIdTokenResult();
     const role = token.claims.role || 'athlete';
 
-    if (to.name === 'login') next(role === 'athlete' ? '/presentation' : '/dashboard');
+    if (to.name === 'login') next(role === 'athlete' ? '/report-card' : '/dashboard');
     else if (requiresAdmin && role !== 'admin') next('/dashboard');
-    else if (requiresStaff && role !== 'admin' && role !== 'coach') next('/presentation');
-    else if (role === 'athlete' && (to.name === 'dashboard' || to.name === 'evaluation' || to.name === 'athletes')) next('/presentation');
+    else if (requiresStaff && role !== 'admin' && role !== 'coach') next('/report-card');
+    else if (role === 'athlete' && to.name !== 'report-card' && to.name !== 'athlete-profile' && to.name !== 'home') next('/report-card');
     else next();
   } else {
     next();

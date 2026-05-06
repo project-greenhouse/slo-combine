@@ -39,14 +39,14 @@ const greeting = computed(() => {
         </div>
       </button>
 
-      <button @click="router.push('/presentation')" class="bg-white border border-gray-200 rounded-xl p-6 text-left hover:border-code8-gold hover:shadow-md transition-all group">
+      <button @click="router.push('/report-card')" class="bg-white border border-gray-200 rounded-xl p-6 text-left hover:border-code8-gold hover:shadow-md transition-all group">
         <div class="flex items-center gap-4">
           <div class="w-12 h-12 rounded-lg bg-blue-50 flex items-center justify-center group-hover:bg-blue-100 transition-colors">
             <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
           </div>
           <div>
-            <h2 class="text-lg font-bold text-gray-900">Presentation Sheet</h2>
-            <p class="text-sm text-gray-500">Athlete-facing data view</p>
+            <h2 class="text-lg font-bold text-gray-900">Athlete Report Card</h2>
+            <p class="text-sm text-gray-500">Athlete-facing performance data</p>
           </div>
         </div>
       </button>

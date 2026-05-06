@@ -64,6 +64,19 @@ const handleLogout = async () => {
 
       <!-- Navigation -->
       <nav class="flex-1 p-4 space-y-2 overflow-y-auto">
+        <!-- Athlete-only nav -->
+        <template v-if="authStore.isAuthenticated && authStore.userRole === 'athlete'">
+          <router-link to="/report-card" active-class="bg-gray-800 text-code8-gold border-r-4 border-code8-gold" class="flex items-center gap-3 px-4 py-3 rounded text-base md:text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+            <span v-if="!isCollapsed || mobileOpen">Report Card</span>
+          </router-link>
+          <router-link to="/profile" active-class="bg-gray-800 text-code8-gold border-r-4 border-code8-gold" class="flex items-center gap-3 px-4 py-3 rounded text-base md:text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors">
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+            <span v-if="!isCollapsed || mobileOpen">My Profile</span>
+          </router-link>
+        </template>
+
+        <!-- Staff nav -->
         <router-link v-if="isStaff()" to="/dashboard" active-class="bg-gray-800 text-code8-gold border-r-4 border-code8-gold" class="flex items-center gap-3 px-4 py-3 rounded text-base md:text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors" :title="isCollapsed ? 'Dashboard' : ''">
           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
           <span v-if="!isCollapsed || mobileOpen">Dashboard</span>
