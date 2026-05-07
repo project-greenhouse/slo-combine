@@ -390,6 +390,7 @@ const saveAthleteInfo = async () => {
                       placeholder="Search Valor athlete..."
                       class="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none"
                       @focus="fetchValorAthletes(); valorDropdownOpen = true"
+                      @input="valorDropdownOpen = true"
                       @blur="closeValorDrop"
                     />
                     <div v-if="valorDropdownOpen" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto overscroll-contain">

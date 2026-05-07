@@ -1,38 +1,98 @@
 # Hawkin Dynamics API Reference
 
-API portal: https://connect.hawkindynamics.com/api
+OpenAPI spec: `hawkin-api-v1.13.json` in repo root
+Live API portal: https://connect.hawkindynamics.com/api
+
+## Base URLs
+
+- **Americas (default):** `https://cloud.hawkindynamics.com`
+- **Europe:** `https://eu.cloud.hawkindynamics.com`
+- **Asia-Pacific:** `https://apac.cloud.hawkindynamics.com`
 
 ## Authentication
 
-- Env var: `HD_TOKEN` (stored in `code8-vue-app/functions/.env`)
-- Python SDK: `hdforce` package
-- Auth: `AuthManager(region="Americas", authToken=HD_TOKEN)`
+Two-step Bearer auth:
 
-## Endpoints currently used
+1. **Refresh Token** — generated in HD dashboard → Settings → Integrations. Stored as `HD_TOKEN` in `code8-vue-app/functions/.env`. Long-lived.
+2. **Access Token** — exchange refresh token via `GET /api/token`. 1-hour expiry. Used as `Authorization: Bearer {AccessToken}` for all other endpoints.
 
-All via the `hdforce` Python SDK in `code8-vue-app/functions/main.py`:
+Our client (`code8-vue-app/functions/hawkin_client.py`) handles the exchange and caches the access token until ~1 minute before expiry.
 
-| SDK call | Purpose | Where |
-|----------|---------|-------|
-| `GetAthletes()` | Fetch full athlete roster | `get_roster()` — merged with Valor + Firestore |
-| `GetTests(typeId="CMJ", from_=..., to_=...)` | Countermovement jump tests | `get_athlete_metrics()` |
-| `GetTests(typeId="MR", from_=..., to_=...)` | Multi-rebound tests | `get_athlete_metrics()` |
+## Endpoints we use
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET`  | `/api/token` | Exchange refresh token → access token |
+| `GET`  | `/api/v1/athletes` | List athletes (params: `includeInactive`) |
+| `POST` | `/api/v1/athletes` | Create single athlete |
+| `POST` | `/api/v1/athletes/bulk` | Create up to 500 athletes |
+| `PUT`  | `/api/v1/athletes/{id}` | Update single athlete (partial) |
+| `PUT`  | `/api/v1/athletes/bulk` | Bulk update up to 500 athletes |
+| `GET`  | `/api/v1/test_types` | List test types (cached per client instance) |
+| `GET`  | `/api/v1` | Get tests (params: `from`, `to`, `syncFrom`, `syncTo`, `athleteId`, `testTypeId`, ...) |
+
+## Test Type Resolution
+
+`GET /api/v1`'s `testTypeId` param expects the org-specific test type ID (not the canonical ID).
+
+The `HawkinClient.find_test_type_id(hint)` helper resolves common shortcuts:
+- `"CMJ"` → matches "Countermovement Jump"
+- `"MR"` → matches "Multi Rebound"
+- `"SJ"` → matches "Squat Jump"
+- `"DJ"` → matches "Drop Jump"
+
+Or pass any name substring; matching is case-insensitive.
+
+## Test Object Shape
+
+Each test from `GET /api/v1` has:
+```jsonc
+{
+  "id": "...",
+  "testType": { "id": "...", "name": "Countermovement Jump", "canonicalId": "..." },
+  "athlete": { "id": "...", "name": "..." },
+  "timestamp": 1551301560,
+  "segment": "Countermovement Jump:5",
+  "Jump Height(m)": 0.42,
+  "mRSI": 0.55,
+  "Peak Relative Propulsive Power(W/kg)": 38.2,
+  // ...other metric keys
+}
+```
+
+`HawkinClient.get_tests()` flattens these into a single-level dict with snake_case metric keys, e.g. `jump_height_m`, `mrsi`, `peak_relative_propulsive_power_w_kg`. The transformation: lowercase, replace `(`, `)`, ` `, `/` with `_`, strip non-alphanumeric, collapse repeats.
 
 ## Caching
 
-Global in-memory cache per function instance:
-- `hd_cache["CMJ"]` / `hd_cache["MR"]` — populated on first call, reused for duration of function cold start.
+- **Access token:** cached in `HawkinClient._access_token`, invalidated 1 minute before `expires_at`.
+- **Test types:** cached in `HawkinClient._test_type_cache` for the client's lifetime.
+- **Test results (CMJ, MR):** cached in `main.py` `hd_cache` dict at module level — survives across function invocations within a single Cloud Function instance.
 
-## Athlete creation
+## Bulk failures
 
-HD supports athlete creation via API (confirmed by user).
-- Method TBD: check `hdforce` SDK for `CreateAthlete()` or equivalent.
-- Will be used by `sync_bookeo_roster` to auto-create Bookeo athletes not yet in HD.
-- Required fields: firstName, lastName, DOB, height, weight, gender (mapped from Bookeo registration data).
+Bulk create/update returns:
+```jsonc
+{
+  "data": [/* successful Athletes */],
+  "hasFailures": true,
+  "failures": [
+    { "reason": "...", "data": { /* original input */ } }
+  ]
+}
+```
+Always check `hasFailures` before assuming success.
 
-## Athlete schema (HD side)
+## External Properties Gotcha
 
-Key fields returned by `GetAthletes()`:
-- `id` — HD athlete ID (stored as `HawkinID` in Firestore `athlete_info`)
-- `name` — full name (used for cross-system matching)
-- Additional fields: teams, groups, position, etc.
+When `PUT`'ing athletes with an `external` field, **any keys NOT in the request will be removed** from the stored record. Always send the full `external` map.
+
+## Rate Limiting
+
+Hawkin recommends `from`/`to` for bulk historical export and `syncFrom`/`syncTo` for incremental sync (every 5 min). Responses exceeding the memory limit will fail — keep windows narrow.
+
+## Athlete Schema (Firestore Side)
+
+`athlete_info.HawkinID` is the foreign key to HD's athlete `id`. Set automatically by:
+- `link_hd_athlete` (matching UI links roster → HD)
+- `create_hd_athlete` (creates in HD then stores ID)
+- `sync_bookeo_roster` (cross-refs new Bookeo athletes against HD by name match)

@@ -45,11 +45,11 @@ const handleLogout = async () => {
     </nav>
 
     <!-- Hero Section -->
-    <main class="container mx-auto px-6 pt-12 pb-40 flex flex-col items-center relative z-10 text-center gap-16">
+    <main class="container mx-auto px-6 pt-6 pb-20 flex flex-col items-center relative z-10 text-center gap-8">
       
       <!-- Floating Hero Visual (No background box) -->
-      <div class="w-full max-w-4xl mx-auto flex justify-center animate-float mt-8">
-        <img src="/SLO-CC-TRANS.PNG" alt="SLO County Combine" class="w-11/12 md:w-full h-auto object-contain drop-shadow-[0_20px_50px_rgba(225,193,115,0.15)]" />
+      <div class="w-full flex justify-center animate-float mt-8">
+        <img src="/SLO-CC-TRANS.PNG" alt="SLO County Combine" class="w-64 sm:w-80 md:w-96 max-h-[40vh] h-auto object-contain drop-shadow-[0_20px_50px_rgba(225,193,115,0.15)]" />
       </div>
 
       <!-- Text Content -->

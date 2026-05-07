@@ -14,7 +14,7 @@ const isStaff = computed(() => authStore.userRole === 'admin' || authStore.userR
 
 onMounted(async () => {
   store.fetchRoster();
-  if (isStaff.value) await fetchValor();
+  if (isStaff.value) { fetchValor(); fetchHdAthletes(); }
 });
 
 const filteredRoster = computed(() => {
@@ -117,6 +117,62 @@ const unlinkValor = async () => {
   } catch {} finally { valorSaving.value = false; }
 };
 
+// ── HD athlete matching ──
+const hdAthletes = ref<{ HawkinID: string; Name: string; assigned: boolean }[]>([]);
+const hdLoading = ref(false);
+const hdSaving = ref<Record<string, boolean>>({});
+const openHdDropdown = ref<string | null>(null);
+const hdSearchTerms = ref<Record<string, string>>({});
+const hdCreating = ref<Record<string, boolean>>({});
+
+const fetchHdAthletes = async () => {
+  hdLoading.value = true;
+  try { const res = await httpsCallable(functions, 'get_hd_athletes')({}); const d = (res.data as any); if (d.status === 'success') hdAthletes.value = d.data; } catch {}
+  finally { hdLoading.value = false; }
+};
+
+const availableHd = computed(() => hdAthletes.value.filter(h => !h.assigned));
+const closeHdDrop = () => { setTimeout(() => { openHdDropdown.value = null; }, 200); };
+
+function suggestedHdMatch(athlete: RosterItem) {
+  const n = normalize(athlete.Name);
+  return availableHd.value.find(h => normalize(h.Name) === n) || null;
+}
+const filteredHdFor = (uid: string) => {
+  const q = (hdSearchTerms.value[uid] || '').toLowerCase();
+  return q ? availableHd.value.filter(h => h.Name.toLowerCase().includes(q)) : availableHd.value;
+};
+const linkHd = async (athlete: RosterItem, hawkinId: string, _hdName: string) => {
+  if (!athlete.athlete_uid) return;
+  hdSaving.value[athlete.athlete_uid] = true; openHdDropdown.value = null;
+  try {
+    const res = await httpsCallable(functions, 'link_hd_athlete')({ athlete_uid: athlete.athlete_uid, hawkin_id: hawkinId, bookeo_name: athlete.Name });
+    const d = res.data as any;
+    if (d.status === 'success' || d.status === 'warning') {
+      const idx = store.roster.findIndex(a => a.athlete_uid === athlete.athlete_uid);
+      if (idx !== -1) store.roster[idx] = { ...store.roster[idx], HawkinID: hawkinId };
+      const ha = hdAthletes.value.find(a => a.HawkinID === hawkinId); if (ha) ha.assigned = true;
+      manageToast.value = d.message; setTimeout(() => { manageToast.value = ''; }, 3000);
+    }
+  } catch {} finally { delete hdSaving.value[athlete.athlete_uid!]; }
+};
+const createInHd = async (athlete: RosterItem) => {
+  if (!athlete.athlete_uid) return;
+  hdCreating.value[athlete.athlete_uid] = true;
+  try {
+    const res = await httpsCallable(functions, 'create_hd_athlete')({ athlete_uid: athlete.athlete_uid, name: athlete.Name });
+    const d = res.data as any;
+    if (d.status === 'success') {
+      const idx = store.roster.findIndex(a => a.athlete_uid === athlete.athlete_uid);
+      if (idx !== -1) store.roster[idx] = { ...store.roster[idx], HawkinID: d.hawkin_id };
+      manageToast.value = d.message; setTimeout(() => { manageToast.value = ''; }, 3000);
+    } else {
+      manageToast.value = d.message || 'Create failed'; setTimeout(() => { manageToast.value = ''; }, 5000);
+    }
+  } catch (e: any) { manageToast.value = e.message || 'Create failed'; setTimeout(() => { manageToast.value = ''; }, 5000); }
+  finally { delete hdCreating.value[athlete.athlete_uid!]; }
+};
+
 // ── Manage tab: Bookeo sync ──
 const bookeoSyncing = ref(false);
 const bookeoResult = ref<any>(null);
@@ -135,6 +191,30 @@ const handleBookeoSync = async () => {
 // ── Manage tab: cross-source matching ──
 const manageSaving = ref<Record<string, boolean>>({});
 const manageToast = ref('');
+const swiftBackfillRunning = ref(false);
+const swiftBackfillResult = ref<any>(null);
+
+const handleBackfillSwift = async () => {
+  swiftBackfillRunning.value = true;
+  swiftBackfillResult.value = null;
+  try {
+    const fn = httpsCallable(functions, 'backfill_swift_ids');
+    const res = await fn({});
+    const d = res.data as any;
+    if (d.status === 'success') {
+      swiftBackfillResult.value = d;
+      await store.forceRefreshRoster();
+    } else {
+      manageToast.value = d.message || 'Backfill failed';
+      setTimeout(() => { manageToast.value = ''; }, 5000);
+    }
+  } catch (e: any) {
+    manageToast.value = e.message || 'Backfill failed';
+    setTimeout(() => { manageToast.value = ''; }, 5000);
+  } finally {
+    swiftBackfillRunning.value = false;
+  }
+};
 const openManageDropdown = ref<string | null>(null);
 const manageSearchTerms = ref<Record<string, string>>({});
 
@@ -315,7 +395,7 @@ const handleCsvUpload = async () => {
                         <button @click="unlinkValor" :disabled="valorSaving" class="text-xs text-red-500 hover:text-red-700 font-medium">{{ valorSaving ? '...' : 'Unlink' }}</button>
                       </div>
                       <div v-else class="relative">
-                        <input v-model="valorSearch" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none" @focus="fetchValor(); valorDropdownOpen = true" @blur="closeValorDrop" />
+                        <input v-model="valorSearch" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none" @focus="fetchValor(); valorDropdownOpen = true" @input="valorDropdownOpen = true" @blur="closeValorDrop" />
                         <div v-if="valorDropdownOpen" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto overscroll-contain">
                           <div v-if="valorLoading" class="px-3 py-2 text-sm text-gray-400">Loading...</div>
                           <button v-else v-for="va in filteredValorAthletes" :key="va.ValorID" @mousedown.prevent="assignValor(va.ValorID, va.Name)" class="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 border-b border-gray-50 last:border-0">{{ va.Name }}</button>
@@ -378,13 +458,31 @@ const handleCsvUpload = async () => {
                 </div>
               </details>
 
-              <!-- Missing HD -->
+              <!-- Missing HD (with matching + create UI) -->
               <div v-if="missingHD.length" class="bg-orange-50 p-4 rounded-xl border border-orange-200">
                 <h3 class="text-sm font-bold text-orange-800 mb-2">Missing in Hawkin Dynamics ({{ missingHD.length }})</h3>
-                <p class="text-xs text-orange-600 mb-3">These athletes need to be created or name-matched in HD. Bookeo name shown (source of truth).</p>
-                <div class="space-y-1">
-                  <div v-for="a in missingHD" :key="a.athlete_uid!" class="text-sm text-orange-900 px-3 py-1.5 bg-orange-100/50 rounded flex justify-between">
-                    <span>{{ a.Name }}</span>
+                <p class="text-xs text-orange-600 mb-3">Match to an existing HD athlete (pushes Bookeo name to HD), or create new.</p>
+                <div class="space-y-2">
+                  <div v-for="athlete in missingHD" :key="athlete.athlete_uid!" class="flex flex-col sm:flex-row sm:items-center gap-2 p-2 bg-orange-100/50 rounded">
+                    <span class="flex-1 text-sm font-medium text-orange-900 truncate">{{ athlete.Name }}</span>
+                    <div class="w-full sm:w-56 flex-shrink-0 flex gap-1">
+                      <!-- Suggested match or dropdown -->
+                      <template v-if="!hdSaving[athlete.athlete_uid!] && !hdCreating[athlete.athlete_uid!]">
+                        <div v-if="suggestedHdMatch(athlete)" class="flex items-center gap-1 flex-1 min-w-0">
+                          <button @click="linkHd(athlete, suggestedHdMatch(athlete)!.HawkinID, suggestedHdMatch(athlete)!.Name)" class="flex-1 bg-code8-gold/10 border border-code8-gold/30 text-code8-dark rounded-md px-2 py-1 text-xs font-medium hover:bg-code8-gold/20 truncate text-left">Link: {{ suggestedHdMatch(athlete)!.Name }}</button>
+                          <button @click="openHdDropdown = athlete.athlete_uid!" class="p-1 text-gray-400 hover:text-gray-600"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg></button>
+                        </div>
+                        <div v-else class="relative flex-1">
+                          <input v-model="hdSearchTerms[athlete.athlete_uid!]" type="text" placeholder="Search HD..." class="w-full bg-white border border-gray-300 rounded-md px-2 py-1 text-xs focus:border-code8-gold outline-none" @focus="openHdDropdown = athlete.athlete_uid!" @input="openHdDropdown = athlete.athlete_uid!" @blur="closeHdDrop" />
+                          <div v-if="openHdDropdown === athlete.athlete_uid" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-36 overflow-y-auto overscroll-contain">
+                            <button v-for="hd in filteredHdFor(athlete.athlete_uid!)" :key="hd.HawkinID" @mousedown.prevent="linkHd(athlete, hd.HawkinID, hd.Name)" class="w-full text-left px-2 py-1.5 text-xs hover:bg-gray-100 border-b border-gray-50 last:border-0">{{ hd.Name }}</button>
+                            <div v-if="filteredHdFor(athlete.athlete_uid!).length === 0" class="px-2 py-1.5 text-xs text-gray-400">No matches</div>
+                          </div>
+                        </div>
+                        <button @click="createInHd(athlete)" class="flex-shrink-0 px-2 py-1 text-xs font-semibold bg-code8-dark text-white rounded-md hover:bg-gray-800" title="Create in HD">+ New</button>
+                      </template>
+                      <div v-else class="text-xs text-gray-400 animate-pulse">{{ hdCreating[athlete.athlete_uid!] ? 'Creating...' : 'Saving...' }}</div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -402,7 +500,7 @@ const handleCsvUpload = async () => {
                         <button @click="openManageDropdown = athlete.athlete_uid!" class="p-1 text-gray-400 hover:text-gray-600"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg></button>
                       </div>
                       <div v-else-if="!manageSaving[athlete.athlete_uid!]" class="relative">
-                        <input v-model="manageSearchTerms[athlete.athlete_uid!]" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-md px-2 py-1 text-xs focus:border-code8-gold outline-none" @focus="openManageDropdown = athlete.athlete_uid!" @blur="closeManageDrop" />
+                        <input v-model="manageSearchTerms[athlete.athlete_uid!]" type="text" placeholder="Search Valor..." class="w-full bg-white border border-gray-300 rounded-md px-2 py-1 text-xs focus:border-code8-gold outline-none" @focus="openManageDropdown = athlete.athlete_uid!" @input="openManageDropdown = athlete.athlete_uid!" @blur="closeManageDrop" />
                         <div v-if="openManageDropdown === athlete.athlete_uid" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-36 overflow-y-auto overscroll-contain">
                           <button v-for="va in filteredValorFor(athlete.athlete_uid!)" :key="va.ValorID" @mousedown.prevent="manageAssign(athlete, va.ValorID, va.Name)" class="w-full text-left px-2 py-1.5 text-xs hover:bg-gray-100 border-b border-gray-50 last:border-0">{{ va.Name }}</button>
                           <div v-if="filteredValorFor(athlete.athlete_uid!).length === 0" class="px-2 py-1.5 text-xs text-gray-400">No matches</div>
@@ -416,8 +514,22 @@ const handleCsvUpload = async () => {
 
               <!-- Missing Swift -->
               <div v-if="missingSwift.length" class="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                <h3 class="text-sm font-bold text-gray-700 mb-2">Missing in Swift ({{ missingSwift.length }})</h3>
-                <p class="text-xs text-gray-500 mb-3">These athletes have no Swift timing data yet. Upload a Swift CSV from the Testing page to auto-link.</p>
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+                  <div>
+                    <h3 class="text-sm font-bold text-gray-700">Missing in Swift ({{ missingSwift.length }})</h3>
+                    <p class="text-xs text-gray-500">If athletes have historical sprint/agility data already in the system, run "Backfill Swift IDs" to link them retroactively.</p>
+                  </div>
+                  <button @click="handleBackfillSwift" :disabled="swiftBackfillRunning" class="flex-shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs font-semibold bg-code8-dark text-white rounded-md hover:bg-gray-800 disabled:opacity-50">
+                    <span v-if="swiftBackfillRunning" class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                    {{ swiftBackfillRunning ? 'Backfilling...' : 'Backfill Swift IDs' }}
+                  </button>
+                </div>
+
+                <div v-if="swiftBackfillResult" class="mb-3 p-3 rounded-lg bg-green-50 border border-green-200">
+                  <p class="text-sm font-semibold text-green-800">{{ swiftBackfillResult.summary }}</p>
+                  <div v-if="swiftBackfillResult.updated?.length" class="mt-1 text-xs text-green-700">Linked: {{ swiftBackfillResult.updated.join(', ') }}</div>
+                </div>
+
                 <div class="space-y-1">
                   <div v-for="a in missingSwift" :key="a.athlete_uid!" class="text-sm text-gray-700 px-3 py-1.5 bg-gray-100/50 rounded">{{ a.Name }}</div>
                 </div>

@@ -195,6 +195,7 @@ const valorNameById = (id: string | null | undefined) => {
                   placeholder="Search Valor..."
                   class="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none"
                   @focus="openDropdown = athlete.athlete_uid!"
+                  @input="openDropdown = athlete.athlete_uid!"
                   @blur="closeDrop"
                 />
                 <div v-if="openDropdown === athlete.athlete_uid" class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto overscroll-contain">

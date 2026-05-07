@@ -3,6 +3,34 @@ import { ref } from 'vue';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase/config';
 
+// Valor diagnostics
+const valorCheckLoading = ref(false);
+const valorCheckResult = ref<any>(null);
+const checkValor = async () => {
+  valorCheckLoading.value = true; valorCheckResult.value = null;
+  try {
+    const fn = httpsCallable(functions, 'check_valor_connection');
+    const res = await fn({});
+    valorCheckResult.value = res.data;
+  } catch (e: any) {
+    valorCheckResult.value = { status: 'error', message: e.message || 'Call failed' };
+  } finally { valorCheckLoading.value = false; }
+};
+
+// HD diagnostics
+const hdCheckLoading = ref(false);
+const hdCheckResult = ref<any>(null);
+const checkHd = async () => {
+  hdCheckLoading.value = true; hdCheckResult.value = null;
+  try {
+    const fn = httpsCallable(functions, 'check_hd_connection');
+    const res = await fn({});
+    hdCheckResult.value = res.data;
+  } catch (e: any) {
+    hdCheckResult.value = { status: 'error', message: e.message || 'Call failed' };
+  } finally { hdCheckLoading.value = false; }
+};
+
 const targetEmail = ref('');
 const targetRole = ref('athlete');
 const athleteName = ref('');
@@ -136,6 +164,42 @@ const handleCreateUser = async () => {
           <span v-if="createIsLoading" class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span><span v-else>Create Account</span>
         </button>
       </form>
+    </div>
+    <!-- Connection Diagnostics -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mt-8">
+      <h2 class="text-xl font-bold text-gray-900 mb-2">Connection Diagnostics</h2>
+      <p class="text-sm text-gray-500 mb-4">Test connections to external data sources.</p>
+
+      <div class="flex flex-wrap gap-2">
+        <button @click="checkValor" :disabled="valorCheckLoading" class="px-4 py-2 text-sm font-semibold bg-code8-dark text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 flex items-center gap-2">
+          <span v-if="valorCheckLoading" class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+          {{ valorCheckLoading ? 'Checking...' : 'Test Valor Connection' }}
+        </button>
+        <button @click="checkHd" :disabled="hdCheckLoading" class="px-4 py-2 text-sm font-semibold bg-code8-dark text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 flex items-center gap-2">
+          <span v-if="hdCheckLoading" class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+          {{ hdCheckLoading ? 'Checking...' : 'Test Hawkin Connection' }}
+        </button>
+      </div>
+
+      <div v-if="valorCheckResult" class="mt-4 space-y-2">
+        <div :class="['p-3 rounded-lg text-sm font-medium', valorCheckResult.status === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200']">
+          Valor: {{ valorCheckResult.message }}
+        </div>
+        <details class="text-xs">
+          <summary class="cursor-pointer text-gray-500 hover:text-gray-700 font-semibold">Valor Diagnostic Details</summary>
+          <pre class="mt-2 p-3 bg-gray-50 rounded-lg overflow-x-auto text-gray-700 border border-gray-200">{{ JSON.stringify(valorCheckResult.steps, null, 2) }}</pre>
+        </details>
+      </div>
+
+      <div v-if="hdCheckResult" class="mt-4 space-y-2">
+        <div :class="['p-3 rounded-lg text-sm font-medium', hdCheckResult.status === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200']">
+          Hawkin: {{ hdCheckResult.message || 'Connected' }}
+        </div>
+        <details class="text-xs" open>
+          <summary class="cursor-pointer text-gray-500 hover:text-gray-700 font-semibold">Hawkin Diagnostic Details</summary>
+          <pre class="mt-2 p-3 bg-gray-50 rounded-lg overflow-x-auto text-gray-700 border border-gray-200">{{ JSON.stringify(hdCheckResult.steps, null, 2) }}</pre>
+        </details>
+      </div>
     </div>
   </div>
 </template>
