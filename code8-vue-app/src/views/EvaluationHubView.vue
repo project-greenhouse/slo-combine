@@ -6,9 +6,12 @@ import { QuillEditor } from '@vueup/vue-quill';
 import '@vueup/vue-quill/dist/vue-quill.snow.css';
 import { useAthleteStore } from '../stores/athleteStore';
 import { useAuthStore } from '../stores/authStore';
+import PresentationView from './PresentationView.vue';
 
 const store = useAthleteStore();
 const authStore = useAuthStore();
+const showReportCard = ref(false);
+const handlePrint = () => { window.print(); };
 
 onMounted(() => {
   store.fetchRoster();
@@ -199,7 +202,7 @@ const formatDate = (timestamp: any) => {
       <!-- Athlete Selector -->
       <div v-if="store.roster.length > 0" class="flex items-center gap-3">
         <label for="athlete-select" class="text-sm font-medium text-gray-700 whitespace-nowrap">Select Athlete:</label>
-        <select 
+        <select
           id="athlete-select"
           class="block w-full md:w-64 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-code8-gold focus:border-code8-gold sm:text-sm rounded-md shadow-sm bg-white border"
           :value="store.selectedAthlete?.Name || ''"
@@ -210,6 +213,10 @@ const formatDate = (timestamp: any) => {
             {{ athlete.Name }}
           </option>
         </select>
+        <button v-if="store.selectedAthlete" @click="showReportCard = true" class="flex-shrink-0 px-3 py-2 text-sm font-semibold bg-code8-gold/10 text-code8-dark border border-code8-gold/20 rounded-lg hover:bg-code8-gold/20 transition-colors flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+          Report Card
+        </button>
       </div>
     </div>
     
@@ -462,6 +469,22 @@ const formatDate = (timestamp: any) => {
             No previous entries found for this athlete.
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Report Card Modal -->
+    <div v-if="showReportCard" class="fixed inset-0 z-50 bg-gray-900/70 backdrop-blur-sm flex flex-col print:static print:bg-white print:backdrop-blur-none">
+      <div class="flex items-center justify-between p-3 bg-code8-dark text-white flex-shrink-0 print:hidden">
+        <h2 class="font-bold text-sm">{{ store.selectedAthlete?.Name }} — Report Card</h2>
+        <div class="flex items-center gap-2">
+          <button @click="handlePrint" class="px-3 py-1 text-xs font-semibold bg-white/10 hover:bg-white/20 rounded-md">Print</button>
+          <button @click="showReportCard = false" class="p-1 text-gray-400 hover:text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto bg-white">
+        <PresentationView />
       </div>
     </div>
   </div>

@@ -2,6 +2,12 @@
 data/athlete_summaries.csv
 AthleteExport*.csv
 
+# Local one-off diagnostic scripts (read secrets from .env)
+test_valor_auth.py
+
+# Claude Code IDE local settings
+.claude/settings.local.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

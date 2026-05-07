@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAthleteStore, type RosterItem } from '../../stores/athleteStore';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../../firebase/config';
 
+const router = useRouter();
 const athleteStore = useAthleteStore();
 const search = ref('');
 const dropdownOpen = ref(false);
@@ -66,7 +68,14 @@ const advanceToNext = () => {
 
 <template>
   <div class="max-w-lg mx-auto">
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">Standing Reach</h1>
+    <button @click="router.push('/testing')" class="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-4">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+      Back to Testing
+    </button>
+    <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
+      <h1 class="text-2xl font-bold text-blue-900">Standing Reach</h1>
+      <p class="text-sm text-blue-700">Record each athlete's standing reach height in inches.</p>
+    </div>
 
     <!-- Toast -->
     <div v-if="toast" :class="['mb-4 p-3 rounded-lg text-sm font-medium', toast.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800']">

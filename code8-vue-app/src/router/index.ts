@@ -1,14 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import HomeView from '../views/HomeView.vue';
 import DashboardView from '../views/DashboardView.vue';
+import AthletesView from '../views/AthletesView.vue';
+import StandingReachEntry from '../views/entry/StandingReachEntry.vue';
+import VerticalJumpEntry from '../views/entry/VerticalJumpEntry.vue';
+import BroadJumpEntry from '../views/entry/BroadJumpEntry.vue';
 import EvaluationHubView from '../views/EvaluationHubView.vue';
 import PresentationView from '../views/PresentationView.vue';
 import LoginView from '../views/LoginView.vue';
 import AdminView from '../views/AdminView.vue';
-import AthleteMatchingView from '../views/AthleteMatchingView.vue';
-import StandingReachEntry from '../views/entry/StandingReachEntry.vue';
-import VerticalJumpEntry from '../views/entry/VerticalJumpEntry.vue';
-import BroadJumpEntry from '../views/entry/BroadJumpEntry.vue';
+import TestingView from '../views/TestingView.vue';
 import { auth } from '../firebase/config';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 
@@ -27,9 +28,21 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      path: '/presentation',
-      name: 'presentation',
-      component: PresentationView // Publicly accessible to athletes
+      path: '/athletes',
+      name: 'athletes',
+      component: AthletesView,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/report-card',
+      name: 'report-card',
+      component: PresentationView
+    },
+    {
+      path: '/profile',
+      name: 'athlete-profile',
+      component: () => import('../views/AthleteProfileView.vue'),
+      meta: { requiresAuth: true }
     },
     {
       path: '/evaluation',
@@ -38,25 +51,25 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      path: '/match-athletes',
-      name: 'match-athletes',
-      component: AthleteMatchingView,
+      path: '/testing',
+      name: 'testing',
+      component: TestingView,
       meta: { requiresAuth: true, requiresStaff: true }
     },
     {
-      path: '/entry/standing-reach',
+      path: '/testing/standing-reach',
       name: 'standing-reach',
       component: StandingReachEntry,
       meta: { requiresAuth: true, requiresStaff: true }
     },
     {
-      path: '/entry/vertical',
+      path: '/testing/vertical',
       name: 'vertical-jump',
       component: VerticalJumpEntry,
       meta: { requiresAuth: true, requiresStaff: true }
     },
     {
-      path: '/entry/broad-jump',
+      path: '/testing/broad-jump',
       name: 'broad-jump',
       component: BroadJumpEntry,
       meta: { requiresAuth: true, requiresStaff: true }
@@ -75,7 +88,6 @@ const router = createRouter({
   ]
 });
 
-// Wait for Firebase Auth to initialize before routing
 const getCurrentUser = (): Promise<User | null> => {
   return new Promise((resolve, reject) => {
     const unsubscribe = onAuthStateChanged(auth, user => {
@@ -90,11 +102,11 @@ router.beforeEach(async (to, _from, next) => {
   const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin);
   const requiresStaff = to.matched.some(record => record.meta.requiresStaff);
   let currentUser = null;
-  
+
   try {
     currentUser = await getCurrentUser();
   } catch (err) {
-    console.error("Firebase Auth failed to initialize. Check your API keys in config.ts!", err);
+    console.error("Firebase Auth failed to initialize.", err);
   }
 
   if (requiresAuth && !currentUser) {
@@ -102,11 +114,11 @@ router.beforeEach(async (to, _from, next) => {
   } else if (currentUser) {
     const token = await currentUser.getIdTokenResult();
     const role = token.claims.role || 'athlete';
-    
-    if (to.name === 'login') next(role === 'athlete' ? '/presentation' : '/dashboard');
+
+    if (to.name === 'login') next(role === 'athlete' ? '/report-card' : '/dashboard');
     else if (requiresAdmin && role !== 'admin') next('/dashboard');
-    else if (requiresStaff && role !== 'admin' && role !== 'coach') next('/presentation');
-    else if (role === 'athlete' && (to.name === 'dashboard' || to.name === 'evaluation')) next('/presentation');
+    else if (requiresStaff && role !== 'admin' && role !== 'coach') next('/report-card');
+    else if (role === 'athlete' && to.name !== 'report-card' && to.name !== 'athlete-profile' && to.name !== 'home') next('/report-card');
     else next();
   } else {
     next();

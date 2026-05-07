@@ -66,7 +66,7 @@ const fetchLatestSummary = () => {
         latestSummary.value = comments[0].summary_html;
       }
     }, (error) => {
-      console.error("Presentation View Snapshot Error:", error);
+      console.error("Report Card Snapshot Error:", error);
     });
   }
 };
@@ -275,7 +275,7 @@ const printReport = () => {
     <!-- Header -->
     <div class="flex flex-col md:flex-row md:justify-between md:items-end mb-8 border-b border-gray-200 pb-4">
       <div>
-        <h1 class="text-4xl font-black text-code8-dark tracking-tight uppercase">{{ store.selectedAthlete?.Name || 'Athlete Presentation' }}</h1>
+        <h1 class="text-4xl font-black text-code8-dark tracking-tight uppercase">{{ store.selectedAthlete?.Name || 'Athlete Report Card' }}</h1>
         <p class="text-gray-500 font-medium mt-1">Code 8 Performance Combine Report</p>
       </div>
       
@@ -299,7 +299,7 @@ const printReport = () => {
     </div>
 
     <div v-if="!store.selectedAthlete" class="text-center py-20 text-gray-500 font-medium">
-      {{ authStore.userRole === 'athlete' ? 'Your profile is not linked or could not be found. Please contact your coach.' : 'Please select an athlete from the dropdown above to view their presentation.' }}
+      {{ authStore.userRole === 'athlete' ? 'Your profile is not linked or could not be found. Please contact your coach.' : 'Please select an athlete from the dropdown above to view their report card.' }}
     </div>
 
     <!-- Loading State -->
