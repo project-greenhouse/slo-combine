@@ -34,11 +34,8 @@ const handleLogout = async () => {
           </button>
         </template>
         <template v-else>
-          <button @click="router.push('/login')" class="hidden md:block text-sm font-semibold hover:text-code8-gold transition-colors px-4 py-2 rounded-full border border-transparent hover:border-gray-800">
+          <button @click="router.push('/login')" class="bg-gradient-to-r from-code8-gold to-yellow-500 text-code8-dark hover:shadow-[0_0_20px_rgba(225,193,115,0.4)] px-6 py-2 rounded-full text-sm font-bold transition-all">
             Login
-          </button>
-          <button @click="router.push('/login?verify=true')" class="bg-gradient-to-r from-code8-gold to-yellow-500 text-code8-dark hover:shadow-[0_0_20px_rgba(225,193,115,0.4)] px-6 py-2 rounded-full text-sm font-bold transition-all">
-            Sign Up
           </button>
         </template>
       </div>
