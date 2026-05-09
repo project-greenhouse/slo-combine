@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { httpsCallable } from 'firebase/functions';
-import { signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from 'firebase/auth';
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail, type User } from 'firebase/auth';
 import { auth, functions } from '../firebase/config';
 
 export const useAuthStore = defineStore('auth', () => {
@@ -33,21 +33,33 @@ export const useAuthStore = defineStore('auth', () => {
     return userCredential.user;
   };
 
-  const registerAthlete = async (email: string, password: string, extraData: any = {}) => {
-    const registerFn = httpsCallable(functions, 'register_athlete');
-    const result = await registerFn({ email, password, ...extraData });
-    const data = result.data as any;
-    
-    if (data.status === 'success') {
-      return await login(email, password);
-    } else {
-      throw new Error(data.message || 'Registration failed');
-    }
+  /**
+   * Athlete identity verification: matches email + birthDate against athlete_info,
+   * creates Firebase Auth account if matched, returns success/error/exists status.
+   * Caller is responsible for triggering password reset email after success.
+   */
+  const verifyAthleteIdentity = async (email: string, birthDate: string) => {
+    const fn = httpsCallable(functions, 'register_athlete');
+    const result = await fn({ email, birthDate });
+    return result.data as { status: string; code?: string; message?: string; athlete_name?: string };
+  };
+
+  const sendPasswordReset = async (email: string) => {
+    await sendPasswordResetEmail(auth, email);
+  };
+
+  const requestAdminVerification = async (name: string, email: string, birthDate: string, message: string) => {
+    const fn = httpsCallable(functions, 'request_admin_verification');
+    const result = await fn({ name, email, birthDate, message });
+    return result.data as { status: string; message?: string };
   };
 
   const logout = async () => {
     await signOut(auth);
   };
 
-  return { user, userRole, athleteName, isAuthenticated, isAuthReady, login, registerAthlete, logout };
+  return {
+    user, userRole, athleteName, isAuthenticated, isAuthReady,
+    login, logout, verifyAthleteIdentity, sendPasswordReset, requestAdminVerification,
+  };
 });

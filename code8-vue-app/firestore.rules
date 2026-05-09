@@ -30,5 +30,12 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdminOrCoach();
     }
+
+    // Admin verification requests: athletes can submit, admins/coaches read & resolve.
+    // (Writes funnel through Cloud Functions only; rules deny direct writes.)
+    match /admin_requests/{requestId} {
+      allow read: if isAdminOrCoach();
+      allow write: if false;
+    }
   }
 }

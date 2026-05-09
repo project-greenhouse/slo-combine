@@ -440,48 +440,212 @@ def set_user_role(req: https_fn.CallableRequest) -> any:
 
 @https_fn.on_call(memory=options.MemoryOption.GB_1, timeout_sec=120, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
 @safe_execute
+def _normalize_birthdate(s):
+    """Match an athlete's birth date across format variants:
+    '2010-08-15', '08-2010', '8/15/2010', etc. Returns (month, year) or None."""
+    if not s:
+        return None
+    s = str(s).strip()
+    # Try ISO YYYY-MM-DD
+    import re as _re
+    m = _re.match(r"^(\d{4})-(\d{1,2})-\d{1,2}$", s)
+    if m:
+        return (int(m.group(2)), int(m.group(1)))
+    # Try MM-YYYY (existing data style)
+    m = _re.match(r"^(\d{1,2})-(\d{4})$", s)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    # Try MM/DD/YYYY
+    m = _re.match(r"^(\d{1,2})/\d{1,2}/(\d{4})$", s)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    # Try YYYY/MM/DD
+    m = _re.match(r"^(\d{4})/(\d{1,2})/\d{1,2}$", s)
+    if m:
+        return (int(m.group(2)), int(m.group(1)))
+    return None
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_512, timeout_sec=60, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
 def register_athlete(req: https_fn.CallableRequest) -> any:
-    """Public endpoint for athletes to self-register. Validates against athlete_info."""
+    """Public endpoint for an athlete to verify their identity and create login.
+
+    Flow: athlete provides email + birthdate → we match against athlete_info →
+    if match, create Firebase Auth user with role:athlete custom claim and send
+    a password reset email so they can set their own password.
+    """
     email = req.data.get("email", "").strip()
-    password = req.data.get("password")
-    
-    if not email or not password:
-        return {"status": "error", "message": "Email and password are required."}
-        
-    # Stream all athletes and find a case-insensitive match for the email
+    birth_date = req.data.get("birthDate", "").strip()
+
+    if not email or not birth_date:
+        return {"status": "error", "message": "Email and birth date are required."}
+
+    target_month_year = _normalize_birthdate(birth_date)
+    if not target_month_year:
+        return {"status": "error", "message": "Could not parse birth date. Use YYYY-MM-DD format."}
+
     email_lower = email.lower()
-    docs = db.collection("athlete_info").stream()
-    athlete_doc = None
-    doc_id = None
-    for doc in docs:
+
+    # Find athlete_info by email (case-insensitive)
+    matched = None
+    matched_id = None
+    for doc in db.collection("athlete_info").stream():
         d = doc.to_dict()
-        doc_email = d.get("email") or d.get("Email")
+        doc_email = d.get("Email") or d.get("email")
         if doc_email and str(doc_email).strip().lower() == email_lower:
-            athlete_doc = d
-            doc_id = doc.id
+            matched = d
+            matched_id = doc.id
             break
-            
-    if not athlete_doc:
-        return {"status": "error", "message": "Email not found in the roster. Please ensure your email matches the one provided to your coach."}
-        
-    athlete_name = athlete_doc.get("Name")
-    
+
+    if not matched:
+        return {
+            "status": "error",
+            "code": "email_not_found",
+            "message": "We couldn't find an athlete with that email. If you don't have an email on file, request admin verification.",
+        }
+
+    # Verify birth date (month + year must match)
+    stored_birth = matched.get("BirthDate") or ""
+    stored_my = _normalize_birthdate(stored_birth)
+    if not stored_my or stored_my != target_month_year:
+        return {
+            "status": "error",
+            "code": "birth_mismatch",
+            "message": "The birth date doesn't match our records. Please double-check.",
+        }
+
+    athlete_name = matched.get("Name", "")
+
+    # Check if Firebase Auth user already exists for this email
     try:
-        user = firebase_auth.create_user(email=email, password=password)
+        existing = firebase_auth.get_user_by_email(email)
+        # Already exists — just (re)send password reset link
+        link = firebase_auth.generate_password_reset_link(email)
+        return {
+            "status": "exists",
+            "message": "An account already exists. Use 'Forgot password' to reset, or sign in directly.",
+            "athlete_name": athlete_name,
+            "reset_link": link,
+        }
+    except firebase_auth.UserNotFoundError:
+        pass
+
+    # Create Firebase Auth user with a placeholder password — they'll reset it
+    import secrets
+    temp_password = secrets.token_urlsafe(24)
+
+    try:
+        user = firebase_auth.create_user(email=email, password=temp_password, email_verified=False)
         firebase_auth.set_custom_user_claims(user.uid, {"role": "athlete", "athlete_name": athlete_name})
-        
-        # Update athlete_info with additional details from sign up
-        update_data = {}
-        for key in ["BirthDate", "BirthYear", "BirthMonth", "Gender", "GradYear", "SchoolGrade", "HeightInches", "LimbDominance", "Sports", "Positions", "CurrentSchool"]:
-            if key in req.data and req.data[key]:
-                update_data[key] = req.data[key]
-        
-        if update_data and doc_id:
-            db.collection("athlete_info").document(doc_id).update(update_data)
-            
-        return {"status": "success", "message": "Successfully registered."}
+
+        # Generate password reset link (sent by client via Firebase Auth SDK)
+        reset_link = firebase_auth.generate_password_reset_link(email)
+
+        # Stamp athlete_info with the auth uid
+        if matched_id:
+            db.collection("athlete_info").document(matched_id).update({"auth_uid": user.uid})
+
+        return {
+            "status": "success",
+            "message": f"Verified! Check your email at {email} to set your password.",
+            "athlete_name": athlete_name,
+            "reset_link": reset_link,
+        }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Failed to create account: {str(e)}"}
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def request_admin_verification(req: https_fn.CallableRequest) -> any:
+    """Public endpoint: athlete with no email on file requests admin add their email.
+    Writes to admin_requests collection for admin review."""
+    name = req.data.get("name", "").strip()
+    email = req.data.get("email", "").strip()
+    birth_date = req.data.get("birthDate", "").strip()
+    message = req.data.get("message", "").strip()
+
+    if not name or not email:
+        return {"status": "error", "message": "Name and email are required."}
+
+    db.collection("admin_requests").add({
+        "type": "athlete_verification",
+        "name": name,
+        "email": email,
+        "birthDate": birth_date,
+        "message": message,
+        "status": "pending",
+        "created_at": firestore.SERVER_TIMESTAMP,
+    })
+
+    return {"status": "success", "message": "Request received. An admin will review and contact you shortly."}
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def list_admin_requests(req: https_fn.CallableRequest) -> any:
+    """Admin/coach only: list pending verification requests."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    requests_out = []
+    for doc in db.collection("admin_requests").where("status", "==", "pending").stream():
+        d = doc.to_dict()
+        d["id"] = doc.id
+        # Convert timestamp to iso string for JSON
+        ts = d.get("created_at")
+        if ts and hasattr(ts, "isoformat"):
+            d["created_at"] = ts.isoformat()
+        requests_out.append(d)
+
+    # Sort by newest first
+    requests_out.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+    return {"status": "success", "data": requests_out}
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def resolve_admin_request(req: https_fn.CallableRequest) -> any:
+    """Admin only: approve or reject a pending request.
+    On approve with athlete_uid, links the request's email to that athlete_info doc."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+    caller = firebase_auth.get_user(caller_uid)
+    if (caller.custom_claims or {}).get("role") != "admin":
+        return {"status": "error", "message": "Admin only."}
+
+    request_id = req.data.get("request_id")
+    action = req.data.get("action")  # 'approve' or 'reject'
+    athlete_uid = req.data.get("athlete_uid")  # required if approving
+
+    if not request_id or action not in ("approve", "reject"):
+        return {"status": "error", "message": "request_id and action ('approve'|'reject') required."}
+
+    request_ref = db.collection("admin_requests").document(request_id)
+    snap = request_ref.get()
+    if not snap.exists:
+        return {"status": "error", "message": "Request not found."}
+    request_data = snap.to_dict()
+
+    if action == "approve":
+        if not athlete_uid:
+            return {"status": "error", "message": "athlete_uid required to approve."}
+        # Update athlete_info with the email
+        db.collection("athlete_info").document(athlete_uid).update({
+            "Email": request_data.get("email"),
+        })
+
+    request_ref.update({
+        "status": "approved" if action == "approve" else "rejected",
+        "resolved_by": caller_uid,
+        "resolved_at": firestore.SERVER_TIMESTAMP,
+        "linked_athlete_uid": athlete_uid if action == "approve" else None,
+    })
+
+    return {"status": "success", "message": f"Request {action}d."}
 
 @https_fn.on_call(memory=options.MemoryOption.GB_1, timeout_sec=120, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
 @safe_execute

@@ -37,7 +37,7 @@ const handleLogout = async () => {
           <button @click="router.push('/login')" class="hidden md:block text-sm font-semibold hover:text-code8-gold transition-colors px-4 py-2 rounded-full border border-transparent hover:border-gray-800">
             Login
           </button>
-          <button @click="router.push('/login?signup=true')" class="bg-gradient-to-r from-code8-gold to-yellow-500 text-code8-dark hover:shadow-[0_0_20px_rgba(225,193,115,0.4)] px-6 py-2 rounded-full text-sm font-bold transition-all">
+          <button @click="router.push('/login?verify=true')" class="bg-gradient-to-r from-code8-gold to-yellow-500 text-code8-dark hover:shadow-[0_0_20px_rgba(225,193,115,0.4)] px-6 py-2 rounded-full text-sm font-bold transition-all">
             Sign Up
           </button>
         </template>
@@ -69,8 +69,8 @@ const handleLogout = async () => {
           <button v-if="authStore.isAuthenticated" @click="router.push(authStore.userRole === 'athlete' ? '/presentation' : '/dashboard')" class="bg-gradient-to-r from-code8-gold to-yellow-500 text-code8-dark px-12 py-5 rounded-full font-black text-xl hover:shadow-[0_0_50px_rgba(225,193,115,0.5)] hover:-translate-y-2 transition-all duration-300">
             View Athlete Reports
           </button>
-          <button v-else @click="router.push('/login?signup=true')" class="bg-gradient-to-r from-code8-gold to-yellow-500 text-code8-dark px-12 py-5 rounded-full font-black text-xl hover:shadow-[0_0_50px_rgba(225,193,115,0.5)] hover:-translate-y-2 transition-all duration-300">
-            Athlete Sign Up
+          <button v-else @click="router.push('/login?verify=true')" class="bg-gradient-to-r from-code8-gold to-yellow-500 text-code8-dark px-12 py-5 rounded-full font-black text-xl hover:shadow-[0_0_50px_rgba(225,193,115,0.5)] hover:-translate-y-2 transition-all duration-300">
+            Verify Your Account
           </button>
         </div>
       </div>
