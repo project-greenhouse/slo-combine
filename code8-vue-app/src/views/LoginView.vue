@@ -41,8 +41,26 @@ const handleLogin = async () => {
   }
 };
 
+// Auto-format MM/DD/YYYY as user types — inserts slashes after MM and DD
+const formatDateInput = (e: Event, field: 'verifyBirthDate' | 'requestBirthDate') => {
+  const input = e.target as HTMLInputElement;
+  let v = input.value.replace(/\D/g, '');
+  if (v.length > 8) v = v.slice(0, 8);
+  let formatted = v;
+  if (v.length >= 3 && v.length <= 4) formatted = `${v.slice(0, 2)}/${v.slice(2)}`;
+  else if (v.length >= 5) formatted = `${v.slice(0, 2)}/${v.slice(2, 4)}/${v.slice(4)}`;
+  if (field === 'verifyBirthDate') verifyBirthDate.value = formatted;
+  else requestBirthDate.value = formatted;
+};
+
+const isValidDate = (s: string): boolean => /^\d{2}\/\d{2}\/\d{4}$/.test(s);
+
 const handleVerify = async () => {
   errorMsg.value = '';
+  if (!isValidDate(verifyBirthDate.value)) {
+    errorMsg.value = 'Birth date must be in MM/DD/YYYY format.';
+    return;
+  }
   isLoading.value = true;
   try {
     const res = await authStore.verifyAthleteIdentity(verifyEmail.value, verifyBirthDate.value);
@@ -140,8 +158,9 @@ onMounted(() => {
             <input v-model="verifyEmail" type="email" required autocomplete="email" class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-code8-gold focus:ring-1 focus:ring-code8-gold" />
           </div>
           <div>
-            <label class="block text-sm font-semibold text-gray-400 mb-1">Birth Date</label>
-            <input v-model="verifyBirthDate" type="date" required class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-code8-gold focus:ring-1 focus:ring-code8-gold" />
+            <label class="block text-sm font-semibold text-gray-400 mb-1">Birth Date <span class="text-gray-500 font-normal">(MM/DD/YYYY)</span></label>
+            <input v-model="verifyBirthDate" type="text" required inputmode="numeric" placeholder="MM/DD/YYYY" pattern="\d{2}/\d{2}/\d{4}" maxlength="10" @input="formatDateInput($event, 'verifyBirthDate')" class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-code8-gold focus:ring-1 focus:ring-code8-gold" />
+            <p class="text-xs text-gray-500 mt-1">Example: 08/15/2010</p>
           </div>
           <div v-if="errorMsg" class="text-red-400 text-sm font-medium text-center bg-red-500/10 py-2 rounded-lg border border-red-500/20">{{ errorMsg }}</div>
           <button type="submit" :disabled="isLoading" class="w-full bg-gradient-to-r from-code8-gold to-yellow-500 text-code8-dark font-black text-lg px-4 py-3 rounded-xl hover:shadow-[0_0_20px_rgba(225,193,115,0.3)] transition-all flex justify-center items-center mt-2 disabled:opacity-50">
@@ -181,8 +200,8 @@ onMounted(() => {
             <input v-model="requestEmail" type="email" required class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold" />
           </div>
           <div>
-            <label class="block text-xs font-semibold text-gray-400 mb-1">Birth Date</label>
-            <input v-model="requestBirthDate" type="date" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold" />
+            <label class="block text-xs font-semibold text-gray-400 mb-1">Birth Date <span class="text-gray-500 font-normal">(MM/DD/YYYY)</span></label>
+            <input v-model="requestBirthDate" type="text" inputmode="numeric" placeholder="MM/DD/YYYY" pattern="\d{2}/\d{2}/\d{4}" maxlength="10" @input="formatDateInput($event, 'requestBirthDate')" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold" />
           </div>
           <div>
             <label class="block text-xs font-semibold text-gray-400 mb-1">Note (optional)</label>
