@@ -440,7 +440,7 @@ def set_user_role(req: https_fn.CallableRequest) -> any:
 
 @https_fn.on_call(memory=options.MemoryOption.GB_1, timeout_sec=120, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
 @safe_execute
-def _normalize_birthdate(s):
+def parse_birthdate(s):
     """Match an athlete's birth date across format variants:
     '2010-08-15', '08-2010', '8/15/2010', etc. Returns (month, year) or None."""
     if not s:
@@ -481,7 +481,7 @@ def register_athlete(req: https_fn.CallableRequest) -> any:
     if not email or not birth_date:
         return {"status": "error", "message": "Email and birth date are required."}
 
-    target_month_year = _normalize_birthdate(birth_date)
+    target_month_year = parse_birthdate(birth_date)
     if not target_month_year:
         return {"status": "error", "message": "Could not parse birth date. Use YYYY-MM-DD format."}
 
@@ -507,7 +507,7 @@ def register_athlete(req: https_fn.CallableRequest) -> any:
 
     # Verify birth date (month + year must match)
     stored_birth = matched.get("BirthDate") or ""
-    stored_my = _normalize_birthdate(stored_birth)
+    stored_my = parse_birthdate(stored_birth)
     if not stored_my or stored_my != target_month_year:
         return {
             "status": "error",
