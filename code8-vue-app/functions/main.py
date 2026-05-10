@@ -285,13 +285,13 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
             if agils:
                 ranks["proAgility"] = round(float(np.interp(min(agils), pct_df["ProAgility"].values[::-1], pct_df["Percentile"].values[::-1])), 1)
 
-            # Vertical
-            verts = [float(v["VerticalJump"]) for v in metrics.get("standing_vert", []) if v.get("VerticalJump")]
+            # Vertical — accept both legacy (VerticalJump) and new (VertInches) field names
+            verts = [float(v.get("VertInches") or v.get("VerticalJump")) for v in metrics.get("standing_vert", []) if (v.get("VertInches") or v.get("VerticalJump"))]
             if verts:
                 ranks["verticalJump"] = round(float(np.interp(max(verts), pct_df["VerticalJump"].values, pct_df["Percentile"].values)), 1)
 
-            # Broad
-            broads = [float(b["BestBroadJump"]) for b in metrics.get("broad_jump", []) if b.get("BestBroadJump")]
+            # Broad — accept both legacy (BestBroadJump) and new (BestInches) field names
+            broads = [float(b.get("BestInches") or b.get("BestBroadJump")) for b in metrics.get("broad_jump", []) if (b.get("BestInches") or b.get("BestBroadJump"))]
             if broads:
                 ranks["broadJump"] = round(float(np.interp(max(broads), pct_df["BroadJump"].values, pct_df["Percentile"].values)), 1)
     except Exception as e:
@@ -316,12 +316,14 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                     return [r for r in rows if r.get("athlete_name") == athlete_name]
                 return []
 
-            # Countermovement Jump
+            # Countermovement Jump — cache only when we successfully resolved a type ID
             if hd_cache["CMJ"] is None:
                 cmj_type_id = client.find_test_type_id("CMJ")
-                hd_cache["CMJ"] = client.get_tests(test_type_id=cmj_type_id, from_ts=from_ts, to_ts=to_ts) if cmj_type_id else []
+                if cmj_type_id:
+                    hd_cache["CMJ"] = client.get_tests(test_type_id=cmj_type_id, from_ts=from_ts, to_ts=to_ts)
+                # else: leave as None so we retry on the next request (instead of permanently caching [])
 
-            cmj_rows = _filter_for_athlete(hd_cache["CMJ"])
+            cmj_rows = _filter_for_athlete(hd_cache["CMJ"]) if hd_cache["CMJ"] else []
             if cmj_rows:
                 fp_pct = [d.to_dict() for d in db.collection("fp_percentiles").stream()]
                 first = cmj_rows[0]
@@ -337,12 +339,13 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                     "Braking Asymmetry": round(r["lr_braking_impulse_index"]) if r.get("lr_braking_impulse_index") is not None else None,
                 } for r in cmj_rows]
 
-            # Multi-Rebound
+            # Multi-Rebound — cache only when we successfully resolved a type ID
             if hd_cache["MR"] is None:
                 mr_type_id = client.find_test_type_id("MR")
-                hd_cache["MR"] = client.get_tests(test_type_id=mr_type_id, from_ts=from_ts, to_ts=to_ts) if mr_type_id else []
+                if mr_type_id:
+                    hd_cache["MR"] = client.get_tests(test_type_id=mr_type_id, from_ts=from_ts, to_ts=to_ts)
 
-            mr_rows = _filter_for_athlete(hd_cache["MR"])
+            mr_rows = _filter_for_athlete(hd_cache["MR"]) if hd_cache["MR"] else []
             if mr_rows:
                 metrics["force_plate_mr"] = [{
                     "Number of Jumps": r.get("number_of_jumps_count"),

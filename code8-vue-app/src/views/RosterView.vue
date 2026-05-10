@@ -52,14 +52,22 @@ const bestAgility = computed(() => {
 
 const bestVert = computed(() => {
   const raw = store.metrics?.standing_vert || [];
-  if (raw.length > 0 && raw[0].VerticalJump) return raw[0].VerticalJump + '"';
-  return '--';
+  let best = 0;
+  for (const r of raw) {
+    const v = Number(r.VertInches ?? r.VerticalJump);
+    if (v > best) best = v;
+  }
+  return best > 0 ? `${best}"` : '--';
 });
 
 const bestBroad = computed(() => {
   const raw = store.metrics?.broad_jump || [];
-  if (raw.length > 0 && raw[0].BestBroadJump) return raw[0].BestBroadJump + '"';
-  return '--';
+  let best = 0;
+  for (const r of raw) {
+    const v = Number(r.BestInches ?? r.BestBroadJump);
+    if (v > best) best = v;
+  }
+  return best > 0 ? `${best}"` : '--';
 });
 
 const lastTestedDate = computed(() => {

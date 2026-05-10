@@ -20,6 +20,26 @@ onMounted(() => {
 // Computed properties to safely extract arrays from the Firestore metrics
 const vertData = computed(() => store.metrics?.standing_vert || []);
 const broadData = computed(() => store.metrics?.broad_jump || []);
+
+// Pick the doc with the highest value, accept both legacy (VerticalJump) and new (VertInches) field names
+const bestVertDoc = computed(() => {
+  let best: any = null;
+  let bestVal = 0;
+  for (const r of vertData.value) {
+    const v = Number(r.VertInches ?? r.VerticalJump) || 0;
+    if (v > bestVal) { bestVal = v; best = r; }
+  }
+  return best;
+});
+const bestBroadDoc = computed(() => {
+  let best: any = null;
+  let bestVal = 0;
+  for (const r of broadData.value) {
+    const v = Number(r.BestInches ?? r.BestBroadJump) || 0;
+    if (v > bestVal) { bestVal = v; best = r; }
+  }
+  return best;
+});
 const fpCmjData = computed(() => store.metrics?.force_plate_cmj || []);
 const fpMrData = computed(() => store.metrics?.force_plate_mr || []);
 
@@ -313,14 +333,19 @@ const formatDate = (timestamp: any) => {
                 <span class="font-semibold text-sm text-gray-700">Standing Vertical</span>
                 <span :class="getRankClass(store.metrics?.ranks?.verticalJump)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ store.metrics?.ranks?.verticalJump }}th Pct</span>
               </div>
-              <div class="p-4 flex-1 flex items-center justify-center" v-if="vertData.length === 0"><p class="text-sm text-gray-500 italic">No data available.</p></div>
+              <div class="p-4 flex-1 flex items-center justify-center" v-if="!bestVertDoc"><p class="text-sm text-gray-500 italic">No data available.</p></div>
               <div class="flex-1 flex flex-col items-center justify-center p-6 bg-white" v-else>
                 <div class="flex items-baseline">
-                  <span class="text-4xl font-black text-gray-900">{{ vertData[0].VerticalJump || '--' }}</span>
+                  <span class="text-4xl font-black text-gray-900">{{ bestVertDoc.VertInches ?? bestVertDoc.VerticalJump ?? '--' }}</span>
                   <span class="text-gray-400 ml-1 font-medium pb-1">in</span>
                 </div>
                 <div class="text-xs text-gray-400 mt-2 font-medium">
-                  T1: {{ vertData[0].JumpHeight_1 || '-' }}" &bull; T2: {{ vertData[0].JumpHeight_2 || '-' }}" &bull; T3: {{ vertData[0].JumpHeight_3 || '-' }}"
+                  <template v-if="bestVertDoc.MaxTouchInches">
+                    Max touch: {{ bestVertDoc.MaxTouchInches }}" &bull; Reach: {{ bestVertDoc.StandingReachInches }}"
+                  </template>
+                  <template v-else>
+                    T1: {{ bestVertDoc.JumpHeight_1 || '-' }}" &bull; T2: {{ bestVertDoc.JumpHeight_2 || '-' }}" &bull; T3: {{ bestVertDoc.JumpHeight_3 || '-' }}"
+                  </template>
                 </div>
               </div>
             </div>
@@ -331,14 +356,14 @@ const formatDate = (timestamp: any) => {
                 <span class="font-semibold text-sm text-gray-700">Broad Jump</span>
                 <span :class="getRankClass(store.metrics?.ranks?.broadJump)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ store.metrics?.ranks?.broadJump }}th Pct</span>
               </div>
-              <div class="p-4 flex-1 flex items-center justify-center" v-if="broadData.length === 0"><p class="text-sm text-gray-500 italic">No data available.</p></div>
+              <div class="p-4 flex-1 flex items-center justify-center" v-if="!bestBroadDoc"><p class="text-sm text-gray-500 italic">No data available.</p></div>
               <div class="flex-1 flex flex-col items-center justify-center p-6 bg-white" v-else>
                 <div class="flex items-baseline">
-                  <span class="text-4xl font-black text-gray-900">{{ broadData[0].BestBroadJump || '--' }}</span>
+                  <span class="text-4xl font-black text-gray-900">{{ bestBroadDoc.BestInches ?? bestBroadDoc.BestBroadJump ?? '--' }}</span>
                   <span class="text-gray-400 ml-1 font-medium pb-1">in</span>
                 </div>
                 <div class="text-xs text-gray-400 mt-2 font-medium">
-                  T1: {{ broadData[0].BroadJump_1 || '-' }}" &bull; T2: {{ broadData[0].BroadJump_2 || '-' }}"
+                  T1: {{ bestBroadDoc.Attempt1Inches ?? bestBroadDoc.BroadJump_1 ?? '-' }}" &bull; T2: {{ bestBroadDoc.Attempt2Inches ?? bestBroadDoc.BroadJump_2 ?? '-' }}"
                 </div>
               </div>
             </div>

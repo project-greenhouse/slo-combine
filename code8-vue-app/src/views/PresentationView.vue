@@ -113,8 +113,11 @@ const getRankClass = (val: number | null | undefined) => {
 
 // --- ECharts Configurations ---
 const jumpChartOption = computed(() => {
-  const vert = store.metrics?.standing_vert?.[0]?.VerticalJump || 0;
-  const broad = store.metrics?.broad_jump?.[0]?.BestBroadJump || 0;
+  // Pick the best (highest) value across all entries; accept both legacy + new field names
+  const vertRows = store.metrics?.standing_vert || [];
+  const broadRows = store.metrics?.broad_jump || [];
+  const vert = vertRows.reduce((m: number, r: any) => Math.max(m, Number(r.VertInches ?? r.VerticalJump) || 0), 0);
+  const broad = broadRows.reduce((m: number, r: any) => Math.max(m, Number(r.BestInches ?? r.BestBroadJump) || 0), 0);
 
   const getJumpBenchmark = (metric: 'vert' | 'broad') => {
     if (compareMode.value === 'elite') return metric === 'vert' ? 35 : 120;

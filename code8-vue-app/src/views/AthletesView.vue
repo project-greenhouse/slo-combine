@@ -77,8 +77,24 @@ const bestAgility = computed(() => {
   raw.forEach((r: any) => { if ((r.Distance == 20 || r.Distance == '20') && Number(r.Total) > 0 && Number(r.Total) < best) best = Number(r.Total); });
   return best === Infinity ? '--' : best.toFixed(2) + 's';
 });
-const bestVert = computed(() => { const r = store.metrics?.standing_vert || []; return r.length && r[0].VerticalJump ? r[0].VerticalJump + '"' : '--'; });
-const bestBroad = computed(() => { const r = store.metrics?.broad_jump || []; return r.length && r[0].BestBroadJump ? r[0].BestBroadJump + '"' : '--'; });
+const bestVert = computed(() => {
+  const rows = store.metrics?.standing_vert || [];
+  let best = 0;
+  for (const r of rows) {
+    const v = Number(r.VertInches ?? r.VerticalJump);
+    if (v > best) best = v;
+  }
+  return best > 0 ? `${best}"` : '--';
+});
+const bestBroad = computed(() => {
+  const rows = store.metrics?.broad_jump || [];
+  let best = 0;
+  for (const r of rows) {
+    const v = Number(r.BestInches ?? r.BestBroadJump);
+    if (v > best) best = v;
+  }
+  return best > 0 ? `${best}"` : '--';
+});
 
 // ── Edit Modal ──
 const showEditModal = ref(false);
