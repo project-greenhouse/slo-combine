@@ -1344,18 +1344,30 @@ def check_hd_connection(req: https_fn.CallableRequest) -> any:
                 "step": "CMJ tests with testTypeId filter",
                 "count": len(cmj_tests),
                 "sample_keys": list(cmj_tests[0].keys()) if cmj_tests else None,
-                "sample": cmj_tests[0] if cmj_tests else None,
             })
         else:
             result["steps"].append({"step": "CMJ tests", "skipped": "no test type ID resolved"})
 
-        # Also try without filter
+        if mr_id:
+            mr_tests = client.get_tests(test_type_id=mr_id, from_ts=from_ts, to_ts=to_ts)
+            result["steps"].append({
+                "step": "MR tests with testTypeId filter",
+                "count": len(mr_tests),
+                "sample_keys": list(mr_tests[0].keys()) if mr_tests else None,
+                "sample_metric_field_names": [k for k in (mr_tests[0].keys() if mr_tests else []) if k.startswith(("avg", "peak", "rsi", "mrsi", "jump", "number"))],
+                "sample_athlete": {"id": mr_tests[0].get("athlete_id"), "name": mr_tests[0].get("athlete_name")} if mr_tests else None,
+            })
+        else:
+            result["steps"].append({"step": "MR tests", "skipped": "no test type ID resolved"})
+
+        # Also try without filter, group counts by test_type_name
         all_tests = client.get_tests(from_ts=from_ts, to_ts=to_ts)
-        unique_test_types = list({t.get("test_type_name") for t in all_tests})
+        from collections import Counter as _Counter
+        type_counts = _Counter(t.get("test_type_name") for t in all_tests)
         result["steps"].append({
             "step": "All tests in window (no filter)",
             "count": len(all_tests),
-            "unique_test_type_names": unique_test_types,
+            "tests_per_type": dict(sorted(type_counts.items(), key=lambda kv: -kv[1])),
         })
     except Exception as e:
         result["steps"].append({"step": "Tests fetch", "error": str(e)})
