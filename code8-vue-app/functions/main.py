@@ -894,6 +894,133 @@ def update_athlete_info(req: https_fn.CallableRequest) -> any:
 
 
 # ──────────────────────────────────────────────
+# Data Collection Dashboard
+# ──────────────────────────────────────────────
+
+@https_fn.on_call(memory=options.MemoryOption.MB_512, timeout_sec=60, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def get_data_dashboard(req: https_fn.CallableRequest) -> any:
+    """Return per-collection data ingestion stats: total count, last write,
+    counts for last 24h/7d/30d. Helps verify data is actually being collected."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    day_ago = now - datetime.timedelta(days=1)
+    week_ago = now - datetime.timedelta(days=7)
+    month_ago = now - datetime.timedelta(days=30)
+
+    def _to_dt(ts):
+        """Coerce Firestore timestamp / ISO string / DD/MM/YYYY string to datetime."""
+        if ts is None:
+            return None
+        # Firestore Timestamp (DatetimeWithNanoseconds)
+        if hasattr(ts, "timestamp") and not isinstance(ts, str):
+            try:
+                return ts if ts.tzinfo else ts.replace(tzinfo=datetime.timezone.utc)
+            except Exception:
+                pass
+        s = str(ts).strip()
+        # ISO 8601 (e.g. "2026-05-09T10:00:00-07:00")
+        try:
+            return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            pass
+        # Swift's "DD/MM/YYYYTHH:MM:SS AM" format
+        import re as _re
+        m = _re.match(r"^(\d{2})/(\d{2})/(\d{4})T(\d{2}):(\d{2}):(\d{2})\s*(AM|PM)?", s)
+        if m:
+            try:
+                day, mo, yr, hh, mm, ss, ampm = m.groups()
+                hh = int(hh)
+                if ampm == "PM" and hh < 12:
+                    hh += 12
+                if ampm == "AM" and hh == 12:
+                    hh = 0
+                return datetime.datetime(int(yr), int(mo), int(day), hh, int(mm), int(ss), tzinfo=datetime.timezone.utc)
+            except Exception:
+                pass
+        return None
+
+    def _summarize(collection_name, ts_field):
+        total = 0
+        last_24h = 0
+        last_7d = 0
+        last_30d = 0
+        latest_dt = None
+        latest_raw = None
+        try:
+            for doc in db.collection(collection_name).stream():
+                d = doc.to_dict()
+                total += 1
+                ts_raw = d.get(ts_field)
+                dt = _to_dt(ts_raw)
+                if dt:
+                    if dt > day_ago:
+                        last_24h += 1
+                    if dt > week_ago:
+                        last_7d += 1
+                    if dt > month_ago:
+                        last_30d += 1
+                    if latest_dt is None or dt > latest_dt:
+                        latest_dt = dt
+                        latest_raw = ts_raw
+        except Exception as e:
+            return {"error": str(e)}
+
+        return {
+            "total": total,
+            "last_24h": last_24h,
+            "last_7d": last_7d,
+            "last_30d": last_30d,
+            "latest": latest_dt.isoformat() if latest_dt else None,
+            "latest_raw": str(latest_raw) if latest_raw else None,
+            "ts_field": ts_field,
+        }
+
+    collections = {
+        "standing_reach": _summarize("standing_reach", "recorded_at"),
+        "standing_vert": _summarize("standing_vert", "recorded_at"),
+        "broad_jump": _summarize("broad_jump", "recorded_at"),
+        "sprint40": _summarize("sprint40", "ActivityTimestamp"),
+        "pro_agility": _summarize("pro_agility", "ActivityTimestamp"),
+        "athlete_summaries": _summarize("athlete_summaries", "created_at"),
+    }
+
+    # Athlete count + how many have email
+    athlete_total = 0
+    athletes_with_email = 0
+    athletes_with_hd = 0
+    athletes_with_valor = 0
+    athletes_with_swift = 0
+    for doc in db.collection("athlete_info").stream():
+        d = doc.to_dict()
+        athlete_total += 1
+        if d.get("Email"):
+            athletes_with_email += 1
+        if d.get("HawkinID"):
+            athletes_with_hd += 1
+        if d.get("ValorID"):
+            athletes_with_valor += 1
+        if d.get("SwiftID"):
+            athletes_with_swift += 1
+
+    return {
+        "status": "success",
+        "generated_at": now.isoformat(),
+        "collections": collections,
+        "athlete_info": {
+            "total": athlete_total,
+            "with_email": athletes_with_email,
+            "with_hd": athletes_with_hd,
+            "with_valor": athletes_with_valor,
+            "with_swift": athletes_with_swift,
+        },
+    }
+
+
+# ──────────────────────────────────────────────
 # Backfill: sync historic Swift IDs onto athlete_info
 # ──────────────────────────────────────────────
 

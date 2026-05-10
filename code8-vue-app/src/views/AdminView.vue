@@ -89,7 +89,72 @@ const formatDate = (iso?: string) => {
 
 const totalPending = computed(() => pendingRequests.value.length);
 
+// Data Collection Dashboard
+interface CollectionStats {
+  total: number;
+  last_24h: number;
+  last_7d: number;
+  last_30d: number;
+  latest: string | null;
+  latest_raw: string | null;
+  error?: string;
+}
+const dashboardLoading = ref(false);
+const dashboardData = ref<{
+  generated_at?: string;
+  collections?: Record<string, CollectionStats>;
+  athlete_info?: { total: number; with_email: number; with_hd: number; with_valor: number; with_swift: number };
+} | null>(null);
+
+const fetchDashboard = async () => {
+  dashboardLoading.value = true;
+  try {
+    const fn = httpsCallable(functions, 'get_data_dashboard');
+    const res = await fn({});
+    const d = res.data as any;
+    if (d.status === 'success') dashboardData.value = d;
+  } catch { /* ignore */ }
+  finally { dashboardLoading.value = false; }
+};
+
+const formatRelative = (iso?: string | null) => {
+  if (!iso) return 'never';
+  try {
+    const dt = new Date(iso);
+    const diffMs = Date.now() - dt.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.floor(diffHr / 24);
+    if (diffDay < 30) return `${diffDay}d ago`;
+    return dt.toLocaleDateString();
+  } catch { return iso; }
+};
+
+const formatAbsolute = (iso?: string | null) => {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+};
+
+const collectionLabels: Record<string, string> = {
+  standing_reach: 'Standing Reach',
+  standing_vert: 'Vertical Jump',
+  broad_jump: 'Broad Jump',
+  sprint40: '40yd Sprint (Swift)',
+  pro_agility: 'Pro Agility (Swift)',
+  athlete_summaries: 'Coach Summaries',
+};
+
+const isStale = (s?: CollectionStats) => {
+  if (!s) return false;
+  if (s.total === 0) return false; // never had data, not really "stale"
+  return s.last_7d === 0;
+};
+
 onMounted(() => {
+  fetchDashboard();
   fetchRequests();
   athleteStore.fetchRoster();
 });
@@ -199,6 +264,74 @@ const handleCreateUser = async () => {
 <template>
   <div class="max-w-2xl mx-auto">
     <h1 class="text-3xl font-bold text-gray-900 mb-6">Admin Portal</h1>
+
+    <!-- Data Collection Dashboard -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-xl font-bold text-gray-900">Data Collection</h2>
+          <p class="text-sm text-gray-500">Verify tests are being recorded across all sources.</p>
+        </div>
+        <button @click="fetchDashboard" :disabled="dashboardLoading" class="text-xs px-3 py-1.5 font-semibold bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 disabled:opacity-50">
+          {{ dashboardLoading ? '...' : 'Refresh' }}
+        </button>
+      </div>
+
+      <div v-if="dashboardLoading && !dashboardData" class="text-center py-8 text-gray-400 animate-pulse text-sm">Loading...</div>
+
+      <template v-else-if="dashboardData">
+        <!-- Athlete summary -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4 pb-4 border-b border-gray-100">
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-gray-900">{{ dashboardData.athlete_info?.total ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Athletes</p>
+          </div>
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-gray-900">{{ dashboardData.athlete_info?.with_email ?? 0 }}</p>
+            <p class="text-xs text-gray-500">With Email</p>
+          </div>
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-green-600">{{ dashboardData.athlete_info?.with_hd ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Linked HD</p>
+          </div>
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-green-600">{{ dashboardData.athlete_info?.with_valor ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Linked Valor</p>
+          </div>
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-green-600">{{ dashboardData.athlete_info?.with_swift ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Linked Swift</p>
+          </div>
+        </div>
+
+        <!-- Per-collection grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div v-for="(stats, key) in dashboardData.collections" :key="key"
+            :class="['p-4 rounded-xl border', isStale(stats) ? 'bg-yellow-50 border-yellow-200' : stats.last_24h ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200']">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="font-bold text-gray-900 text-sm">{{ collectionLabels[key] || key }}</h3>
+              <span v-if="isStale(stats)" class="text-xs font-semibold text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded">STALE</span>
+              <span v-else-if="stats.last_24h" class="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded">FRESH</span>
+            </div>
+            <div v-if="stats.error" class="text-xs text-red-600">Error: {{ stats.error }}</div>
+            <template v-else>
+              <p class="text-xs text-gray-600 mb-2">
+                Last write: <strong>{{ formatRelative(stats.latest) }}</strong>
+                <span v-if="stats.latest" class="text-gray-400">({{ formatAbsolute(stats.latest) }})</span>
+              </p>
+              <div class="grid grid-cols-4 gap-2 text-center">
+                <div><p class="text-xs text-gray-500">Total</p><p class="font-bold text-gray-900">{{ stats.total }}</p></div>
+                <div><p class="text-xs text-gray-500">24h</p><p class="font-bold" :class="stats.last_24h ? 'text-green-600' : 'text-gray-400'">{{ stats.last_24h }}</p></div>
+                <div><p class="text-xs text-gray-500">7d</p><p class="font-bold" :class="stats.last_7d ? 'text-green-600' : 'text-gray-400'">{{ stats.last_7d }}</p></div>
+                <div><p class="text-xs text-gray-500">30d</p><p class="font-bold text-gray-700">{{ stats.last_30d }}</p></div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <p class="text-xs text-gray-400 mt-3">Generated {{ formatRelative(dashboardData.generated_at) }} · STALE = no writes in past 7 days</p>
+      </template>
+    </div>
 
     <!-- Pending Athlete Verification Requests -->
     <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
