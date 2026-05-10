@@ -313,7 +313,8 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                     if matched:
                         return matched
                 if athlete_name:
-                    return [r for r in rows if r.get("athlete_name") == athlete_name]
+                    target = athlete_name.lower().strip()
+                    return [r for r in rows if (r.get("athlete_name") or "").lower().strip() == target]
                 return []
 
             # Countermovement Jump — cache only when we successfully resolved a type ID
@@ -354,8 +355,19 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                     "Avg RSI": r.get("avg_rsi"),
                     "Peak RSI": r.get("peak_rsi"),
                 } for r in mr_rows]
+
+            # Debug info to help diagnose missing data per athlete
+            metrics["_hd_debug"] = {
+                "athlete_hawkin_id": athlete_hawkin_id,
+                "athlete_name_query": athlete_name,
+                "cmj_total_in_window": len(hd_cache["CMJ"] or []),
+                "cmj_matched_for_athlete": len(cmj_rows) if hd_cache["CMJ"] else None,
+                "mr_total_in_window": len(hd_cache["MR"] or []),
+                "mr_matched_for_athlete": len(mr_rows) if hd_cache["MR"] else None,
+            }
     except Exception as e:
         print(f"Error fetching HD metrics: {e}")
+        metrics["_hd_debug"] = {"error": str(e)}
         
     # Fetch Valor Movement Data
     metrics["valor"] = {"Shoulder": 0, "Ankle": 0, "Hip": 0}
