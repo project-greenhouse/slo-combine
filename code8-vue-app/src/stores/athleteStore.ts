@@ -74,30 +74,43 @@ export const useAthleteStore = defineStore('athlete', () => {
     await fetchAthleteMetrics(athlete);
   };
 
-  const fetchAthleteMetrics = async (athlete: RosterItem) => {
+  // Currently-selected cohort for ranking comparisons.
+  // Phase 1: 'combine' (dynamic — all combine athletes ever) | 'elite' (static reference tables).
+  const currentCohort = ref<string>('combine');
+
+  const fetchAthleteMetrics = async (athlete: RosterItem, opts?: { cohort?: string }) => {
     // 1. Clear old data immediately to prevent visual ghosting!
     metrics.value = null;
 
     if (!athlete.athlete_uid) return;
-    
-    // 2. Check if we already fetched this athlete's data
-    if (metricsCache.value[athlete.athlete_uid]) {
-      metrics.value = metricsCache.value[athlete.athlete_uid];
+
+    const cohort = opts?.cohort ?? currentCohort.value;
+    const cacheKey = `${athlete.athlete_uid}::${cohort}`;
+
+    // 2. Check if we already fetched this athlete's data for this cohort
+    if (metricsCache.value[cacheKey]) {
+      metrics.value = metricsCache.value[cacheKey];
       return; // Instant load!
     }
 
     const requestId = ++currentRequestId;
     metricsLoading.value = true;
-    
+
     try {
       const getMetrics = httpsCallable(functions, 'get_athlete_metrics');
-      const result = await getMetrics({ athlete_uid: athlete.athlete_uid, Name: athlete.Name, HawkinID: athlete.HawkinID, ValorID: athlete.ValorID });
+      const result = await getMetrics({
+        athlete_uid: athlete.athlete_uid,
+        Name: athlete.Name,
+        HawkinID: athlete.HawkinID,
+        ValorID: athlete.ValorID,
+        cohort,
+      });
       const responseData = result.data as any;
-      
+
       // Only update state if this is still the active athlete requested (prevents ghosting!)
       if (requestId === currentRequestId && responseData.status === 'success') {
         metrics.value = responseData.data;
-        metricsCache.value[athlete.athlete_uid] = responseData.data; // Save to cache
+        metricsCache.value[cacheKey] = responseData.data; // Save to cache
       } else if (responseData.status === 'error') {
         console.error("Backend error fetching metrics:", responseData.message);
         if (responseData.traceback) console.error("Traceback:\n", responseData.traceback);
@@ -111,8 +124,16 @@ export const useAthleteStore = defineStore('athlete', () => {
     }
   };
 
+  const setCohort = async (cohort: string) => {
+    if (cohort === currentCohort.value) return;
+    currentCohort.value = cohort;
+    if (selectedAthlete.value) {
+      await fetchAthleteMetrics(selectedAthlete.value, { cohort });
+    }
+  };
+
   return {
-    roster, selectedAthlete, loading, error, metrics, metricsLoading,
-    fetchRoster, forceRefreshRoster, selectAthlete, fetchAthleteMetrics
+    roster, selectedAthlete, loading, error, metrics, metricsLoading, currentCohort,
+    fetchRoster, forceRefreshRoster, selectAthlete, fetchAthleteMetrics, setCohort,
   };
 });

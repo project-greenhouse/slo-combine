@@ -256,44 +256,78 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
     athlete_name = data.get("Name")
     athlete_hawkin_id = data.get("HawkinID")
     athlete_valor_id = data.get("ValorID")
+    cohort = data.get("cohort") or "combine"  # 'combine' (dynamic) or 'elite' (static tables)
 
     if not athlete_uid:
         return {"status": "error", "message": "No athlete_uid provided"}
-        
+
     collections = ["sprint40", "pro_agility", "standing_vert", "broad_jump"]
     metrics = {}
     ranks = {}
-    
+
     for col in collections:
         docs = db.collection(col).where("athlete_uid", "==", athlete_uid).stream()
         # Convert firestore docs to dicts
         metrics[col] = [doc.to_dict() for doc in docs]
 
-    # --- Calculate Combine Percentiles ---
+    # --- Calculate Percentile Ranks via percentile_engine ---
+    from percentile_engine import (
+        rank as _rank, best as _best,
+        gather_dynamic_cohort_firestore, gather_dynamic_cohort_hd, gather_static_cohort,
+    )
+
+    def _build_cohort_combine_firestore(collection_name, extractor):
+        """Combine cohort = all values across all athletes' docs in this collection."""
+        return gather_dynamic_cohort_firestore(db, collection_name, extractor)
+
+    def _extract_sprint40(d):
+        if d.get("Distance") in [40, "40"] and d.get("Total"):
+            try: return float(d["Total"])
+            except (TypeError, ValueError): return None
+        return None
+
+    def _extract_proagility(d):
+        if d.get("Distance") in [20, "20"] and d.get("Total"):
+            try: return float(d["Total"])
+            except (TypeError, ValueError): return None
+        return None
+
+    def _extract_vert(d):
+        return d.get("VertInches") or d.get("VerticalJump")
+
+    def _extract_broad(d):
+        return d.get("BestInches") or d.get("BestBroadJump")
+
     try:
-        combine_pct = [d.to_dict() for d in db.collection("combine_percentiles").stream()]
-        if combine_pct:
-            pct_df = pd.DataFrame(combine_pct).sort_values("Percentile")
-            
-            # Sprint 40 (Lower time is better, so array is reversed for numpy interp)
-            sprints = [float(s["Total"]) for s in metrics.get("sprint40", []) if s.get("Distance") in [40, "40"] and s.get("Total")]
-            if sprints:
-                ranks["sprint40"] = round(float(np.interp(min(sprints), pct_df["Sprint40"].values[::-1], pct_df["Percentile"].values[::-1])), 1)
-                
-            # Pro Agility
-            agils = [float(a["Total"]) for a in metrics.get("pro_agility", []) if a.get("Distance") in [20, "20"] and a.get("Total")]
-            if agils:
-                ranks["proAgility"] = round(float(np.interp(min(agils), pct_df["ProAgility"].values[::-1], pct_df["Percentile"].values[::-1])), 1)
+        # Athlete's own best values
+        athlete_sprint = _best(
+            [_extract_sprint40(s) for s in metrics.get("sprint40", [])],
+            lower_is_better=True,
+        )
+        athlete_proagil = _best(
+            [_extract_proagility(a) for a in metrics.get("pro_agility", [])],
+            lower_is_better=True,
+        )
+        athlete_vert = _best([_extract_vert(v) for v in metrics.get("standing_vert", [])])
+        athlete_broad = _best([_extract_broad(b) for b in metrics.get("broad_jump", [])])
 
-            # Vertical — accept both legacy (VerticalJump) and new (VertInches) field names
-            verts = [float(v.get("VertInches") or v.get("VerticalJump")) for v in metrics.get("standing_vert", []) if (v.get("VertInches") or v.get("VerticalJump"))]
-            if verts:
-                ranks["verticalJump"] = round(float(np.interp(max(verts), pct_df["VerticalJump"].values, pct_df["Percentile"].values)), 1)
+        if cohort == "elite":
+            # Static seeded reference tables = "Elite Benchmarks" cohort
+            sprint_cohort = gather_static_cohort(db, "combine_percentiles", "Sprint40")
+            proagil_cohort = gather_static_cohort(db, "combine_percentiles", "ProAgility")
+            vert_cohort = gather_static_cohort(db, "combine_percentiles", "VerticalJump")
+            broad_cohort = gather_static_cohort(db, "combine_percentiles", "BroadJump")
+        else:
+            # Dynamic cohort = all combine athletes ever tested
+            sprint_cohort = _build_cohort_combine_firestore("sprint40", _extract_sprint40)
+            proagil_cohort = _build_cohort_combine_firestore("pro_agility", _extract_proagility)
+            vert_cohort = _build_cohort_combine_firestore("standing_vert", _extract_vert)
+            broad_cohort = _build_cohort_combine_firestore("broad_jump", _extract_broad)
 
-            # Broad — accept both legacy (BestBroadJump) and new (BestInches) field names
-            broads = [float(b.get("BestInches") or b.get("BestBroadJump")) for b in metrics.get("broad_jump", []) if (b.get("BestInches") or b.get("BestBroadJump"))]
-            if broads:
-                ranks["broadJump"] = round(float(np.interp(max(broads), pct_df["BroadJump"].values, pct_df["Percentile"].values)), 1)
+        ranks["sprint40"] = _rank(athlete_sprint, sprint_cohort, lower_is_better=True, cohort_label=cohort)
+        ranks["proAgility"] = _rank(athlete_proagil, proagil_cohort, lower_is_better=True, cohort_label=cohort)
+        ranks["verticalJump"] = _rank(athlete_vert, vert_cohort, cohort_label=cohort)
+        ranks["broadJump"] = _rank(athlete_broad, broad_cohort, cohort_label=cohort)
     except Exception as e:
         print(f"Error calculating combine ranks: {e}")
         
@@ -326,12 +360,19 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
 
             cmj_rows = _filter_for_athlete(hd_cache["CMJ"]) if hd_cache["CMJ"] else []
             if cmj_rows:
-                fp_pct = [d.to_dict() for d in db.collection("fp_percentiles").stream()]
-                first = cmj_rows[0]
-                if fp_pct and first.get("jump_height_m") is not None and first.get("mrsi") is not None:
-                    f_df = pd.DataFrame(fp_pct).sort_values("Percentile")
-                    ranks["fp_jump_height"] = round(float(np.interp(first["jump_height_m"], f_df["JumpHeight"].values, f_df["Percentile"].values)), 1)
-                    ranks["fp_mrsi"] = round(float(np.interp(first["mrsi"], f_df["mRSI"].values, f_df["Percentile"].values)), 1)
+                # Athlete's best CMJ values
+                best_jh = _best([r.get("jump_height_m") for r in cmj_rows])
+                best_mrsi = _best([r.get("mrsi") for r in cmj_rows])
+
+                if cohort == "elite":
+                    jh_cohort = gather_static_cohort(db, "fp_percentiles", "JumpHeight")
+                    mrsi_cohort = gather_static_cohort(db, "fp_percentiles", "mRSI")
+                else:
+                    jh_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ"], "jump_height_m")
+                    mrsi_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ"], "mrsi")
+
+                ranks["fp_jump_height"] = _rank(best_jh, jh_cohort, cohort_label=cohort)
+                ranks["fp_mrsi"] = _rank(best_mrsi, mrsi_cohort, cohort_label=cohort)
 
                 metrics["force_plate_cmj"] = [{
                     "Jump Height (in)": (r["jump_height_m"] * 39.3701) if r.get("jump_height_m") is not None else None,
@@ -371,6 +412,46 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                         "Rebound Stiffness": r.get("rebound_stiffness_n_m"),
                         "Jump Height Ratio": ratio,
                     })
+
+                # CMJ Rebound percentile ranks.
+                # No "elite" static table exists for these — only the dynamic combine cohort is meaningful.
+                # When cohort='elite' is requested, we still emit the dynamic ranks (best signal we have).
+                best_rebound_jh = _best([r.get("rebound_jump_height_m") for r in cmj_reb_rows])
+                best_rebound_rsi = _best([r.get("rebound_rsi") for r in cmj_reb_rows])
+                # Stiffness is signed (negative N/m); larger magnitude = stiffer.
+                # Take the most-negative value as "best" — implemented as min on raw values.
+                best_rebound_stiffness = _best(
+                    [r.get("rebound_stiffness_n_m") for r in cmj_reb_rows],
+                    lower_is_better=True,
+                )
+                # Jump Height Ratio = CMJ/Rebound; lower = better (rebound goes higher than CMJ).
+                ratios = []
+                for r in cmj_reb_rows:
+                    rj = r.get("rebound_jump_height_m")
+                    cj = r.get("cmj_jump_height_m")
+                    if rj and cj:
+                        try:
+                            ratios.append(float(cj) / float(rj))
+                        except Exception:
+                            pass
+                best_ratio = min(ratios) if ratios else None
+
+                jh_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_jump_height_m")
+                rsi_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_rsi")
+                stiff_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_stiffness_n_m")
+                ratio_cohort = []
+                for t in (hd_cache["CMJ_REBOUND"] or []):
+                    rj, cj = t.get("rebound_jump_height_m"), t.get("cmj_jump_height_m")
+                    if rj and cj:
+                        try:
+                            ratio_cohort.append(float(cj) / float(rj))
+                        except Exception:
+                            pass
+
+                ranks["cmj_rebound_jump_height"] = _rank(best_rebound_jh, jh_cohort, cohort_label="combine")
+                ranks["cmj_rebound_rsi"] = _rank(best_rebound_rsi, rsi_cohort, cohort_label="combine")
+                ranks["cmj_rebound_stiffness"] = _rank(best_rebound_stiffness, stiff_cohort, lower_is_better=True, cohort_label="combine")
+                ranks["cmj_rebound_jump_height_ratio"] = _rank(best_ratio, ratio_cohort, lower_is_better=True, cohort_label="combine")
 
             # Debug info to help diagnose missing data per athlete
             metrics["_hd_debug"] = {

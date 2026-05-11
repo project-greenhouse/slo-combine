@@ -74,17 +74,23 @@ const fetchLatestSummary = () => {
 watch(() => store.selectedAthlete, fetchLatestSummary, { immediate: true });
 onUnmounted(() => { if (unsubscribe) unsubscribe(); });
 
-// --- Benchmark Toggle Logic ---
-const compareMode = ref('allTime'); // 'combine' | 'allTime' | 'elite'
+// --- Cohort selection (real, backend-driven; toggle buttons call store.setCohort directly) ---
 
-const getDisplayRank = (metricType: 'sprint40'|'proAgility'|'verticalJump'|'broadJump'|'fp_jump_height'|'fp_mrsi') => {
-  const rawRank = store.metrics?.ranks?.[metricType];
-  if (!rawRank) return '--';
-  
-  // Mocking the variation for the toggle until the backend returns all 3 distinct datasets
-  if (compareMode.value === 'elite') return Math.max(1, Math.round(rawRank * 0.82)); 
-  if (compareMode.value === 'combine') return Math.min(99, Math.round(rawRank * 1.08));
-  return rawRank;
+// Rank object shape: { percentile: number, n: number, cohort: string } | null
+const rankPct = (r: any): number | null => {
+  if (r == null) return null;
+  if (typeof r === 'number') return r;
+  if (typeof r === 'object' && typeof r.percentile === 'number') return r.percentile;
+  return null;
+};
+const rankLabel = (rank: any) => {
+  const v = rankPct(rank);
+  if (v == null) return '--';
+  return `${Math.round(v)}th Pct`;
+};
+const getDisplayRank = (metricType: string) => {
+  const v = rankPct(store.metrics?.ranks?.[metricType]);
+  return v == null ? '--' : Math.round(v);
 };
 
 const fpCmjData = computed(() => store.metrics?.force_plate_cmj || []);
@@ -103,9 +109,10 @@ const hasSpeedData = computed(() => {
   return (store.metrics?.sprint40?.length > 0) || (store.metrics?.pro_agility?.length > 0);
 });
 
-// Rank Coloring Helper
-const getRankClass = (val: number | null | undefined) => {
-  if (!val) return 'hidden';
+// Rank Coloring Helper (accepts either a number or a rank object {percentile, n, cohort})
+const getRankClass = (rank: any) => {
+  const val = rankPct(rank);
+  if (val == null) return 'hidden';
   if (val >= 75) return 'bg-code8-green/10 text-code8-green border-code8-green';
   if (val >= 25) return 'bg-code8-amber/10 text-yellow-600 border-code8-amber';
   return 'bg-code8-red/10 text-code8-red border-code8-red';
@@ -120,9 +127,8 @@ const jumpChartOption = computed(() => {
   const broad = broadRows.reduce((m: number, r: any) => Math.max(m, Number(r.BestInches ?? r.BestBroadJump) || 0), 0);
 
   const getJumpBenchmark = (metric: 'vert' | 'broad') => {
-    if (compareMode.value === 'elite') return metric === 'vert' ? 35 : 120;
-    if (compareMode.value === 'allTime') return metric === 'vert' ? 28 : 105;
-    return metric === 'vert' ? 24 : 95;
+    if (store.currentCohort === 'elite') return metric === 'vert' ? 35 : 120;
+    return metric === 'vert' ? 28 : 105; // combine (dynamic) — same midline as all-time used to be
   };
   
   return {
@@ -193,9 +199,8 @@ const speedChartOption = computed(() => {
   const a20 = bestAgil && bestAgil['20'] ? bestAgil['20'] - (a5 + a10 + a15) : 0;
 
   const getSpeedBenchmark = (metric: 'sprint' | 'agility') => {
-    if (compareMode.value === 'elite') return metric === 'sprint' ? 4.5 : 4.2;
-    if (compareMode.value === 'allTime') return metric === 'sprint' ? 4.8 : 4.5;
-    return metric === 'sprint' ? 5.1 : 4.8;
+    if (store.currentCohort === 'elite') return metric === 'sprint' ? 4.5 : 4.2;
+    return metric === 'sprint' ? 4.8 : 4.5; // combine (dynamic)
   };
 
   return {
@@ -293,10 +298,12 @@ const printReport = () => {
             <option v-for="athlete in store.roster" :key="athlete.Name" :value="athlete.Name">{{ athlete.Name }}</option>
           </select>
         </div>
-        <div class="flex bg-gray-100 p-1 rounded-lg border border-gray-200 shadow-sm text-sm">
-          <button @click="compareMode = 'combine'" :class="['px-3 py-1.5 rounded-md font-semibold transition-colors', compareMode === 'combine' ? 'bg-white text-code8-dark shadow' : 'text-gray-500 hover:text-gray-700']">Current Combine</button>
-          <button @click="compareMode = 'allTime'" :class="['px-3 py-1.5 rounded-md font-semibold transition-colors', compareMode === 'allTime' ? 'bg-white text-code8-dark shadow' : 'text-gray-500 hover:text-gray-700']">All-Time</button>
-          <button @click="compareMode = 'elite'" :class="['px-3 py-1.5 rounded-md font-semibold transition-colors', compareMode === 'elite' ? 'bg-white text-code8-dark shadow' : 'text-gray-500 hover:text-gray-700']">Pro / Elite</button>
+        <div class="flex flex-col items-end gap-1">
+          <span class="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Compare against</span>
+          <div class="flex bg-gray-100 p-1 rounded-lg border border-gray-200 shadow-sm text-sm">
+            <button @click="store.setCohort('combine')" :class="['px-3 py-1.5 rounded-md font-semibold transition-colors', store.currentCohort === 'combine' ? 'bg-white text-code8-dark shadow' : 'text-gray-500 hover:text-gray-700']">Combine Athletes</button>
+            <button @click="store.setCohort('elite')" :class="['px-3 py-1.5 rounded-md font-semibold transition-colors', store.currentCohort === 'elite' ? 'bg-white text-code8-dark shadow' : 'text-gray-500 hover:text-gray-700']">Elite Benchmarks</button>
+          </div>
         </div>
       </div>
     </div>
@@ -356,7 +363,7 @@ const printReport = () => {
           <div class="border border-gray-200 rounded-lg overflow-hidden">
             <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
               <span class="font-semibold text-sm text-gray-700">Countermovement Jump (CMJ)</span>
-              <span :class="getRankClass(store.metrics?.ranks?.fp_jump_height)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ compareMode === 'elite' ? 'Elite' : compareMode === 'allTime' ? 'All-Time' : 'Combine' }} Rank (Jump Ht): {{ getDisplayRank('fp_jump_height') }}th Pct</span>
+              <span :class="getRankClass(store.metrics?.ranks?.fp_jump_height)" class="text-[10px] px-2 py-0.5 rounded border font-bold">Jump Ht: {{ rankLabel(store.metrics?.ranks?.fp_jump_height) }}</span>
             </div>
             <div class="p-4" v-if="fpCmjData.length === 0"><p class="text-sm text-gray-500 italic">No CMJ data available.</p></div>
             <table class="w-full text-sm text-left text-gray-600" v-else>
@@ -383,7 +390,13 @@ const printReport = () => {
 
           <!-- CMJ Rebound Table -->
           <div class="border border-gray-200 rounded-lg overflow-hidden">
-            <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 font-semibold text-sm text-gray-700">CMJ Rebound</div>
+            <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex flex-wrap items-center gap-2">
+              <span class="font-semibold text-sm text-gray-700">CMJ Rebound</span>
+              <span :class="getRankClass(store.metrics?.ranks?.cmj_rebound_jump_height)" class="text-[10px] px-2 py-0.5 rounded border font-bold">Ht: {{ rankLabel(store.metrics?.ranks?.cmj_rebound_jump_height) }}</span>
+              <span :class="getRankClass(store.metrics?.ranks?.cmj_rebound_rsi)" class="text-[10px] px-2 py-0.5 rounded border font-bold">RSI: {{ rankLabel(store.metrics?.ranks?.cmj_rebound_rsi) }}</span>
+              <span :class="getRankClass(store.metrics?.ranks?.cmj_rebound_stiffness)" class="text-[10px] px-2 py-0.5 rounded border font-bold">Stiff: {{ rankLabel(store.metrics?.ranks?.cmj_rebound_stiffness) }}</span>
+              <span :class="getRankClass(store.metrics?.ranks?.cmj_rebound_jump_height_ratio)" class="text-[10px] px-2 py-0.5 rounded border font-bold">Ratio: {{ rankLabel(store.metrics?.ranks?.cmj_rebound_jump_height_ratio) }}</span>
+            </div>
             <div class="p-4" v-if="fpCmjReboundData.length === 0"><p class="text-sm text-gray-500 italic">No CMJ Rebound data available.</p></div>
             <table class="w-full text-sm text-left text-gray-600" v-else>
               <thead class="text-xs text-gray-400 uppercase bg-white border-b border-gray-100">
