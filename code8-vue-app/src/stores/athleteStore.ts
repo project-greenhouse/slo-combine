@@ -21,6 +21,9 @@ export interface RosterItem {
   Sports?: string | null;
   Positions?: string | null;
   CurrentSchool?: string | null;
+  SportsTags?: string[] | null;
+  PositionsTags?: string[] | null;
+  proposed_tags?: { SportsTags?: string[]; PositionsTags?: string[] } | null;
 }
 
 export const useAthleteStore = defineStore('athlete', () => {
@@ -75,17 +78,22 @@ export const useAthleteStore = defineStore('athlete', () => {
   };
 
   // Currently-selected cohort for ranking comparisons.
-  // Phase 1: 'combine' (dynamic — all combine athletes ever) | 'elite' (static reference tables).
-  const currentCohort = ref<string>('combine');
+  // Either a string ('combine' | 'elite') or a structured filter
+  // { type: 'sport'|'position'|'age', value: string }.
+  type CohortSpec = string | { type: 'sport' | 'position' | 'age'; value: string };
+  const currentCohort = ref<CohortSpec>('combine');
 
-  const fetchAthleteMetrics = async (athlete: RosterItem, opts?: { cohort?: string }) => {
+  const cohortToString = (c: CohortSpec): string =>
+    typeof c === 'string' ? c : `${c.type}:${c.value}`;
+
+  const fetchAthleteMetrics = async (athlete: RosterItem, opts?: { cohort?: CohortSpec }) => {
     // 1. Clear old data immediately to prevent visual ghosting!
     metrics.value = null;
 
     if (!athlete.athlete_uid) return;
 
     const cohort = opts?.cohort ?? currentCohort.value;
-    const cacheKey = `${athlete.athlete_uid}::${cohort}`;
+    const cacheKey = `${athlete.athlete_uid}::${cohortToString(cohort)}`;
 
     // 2. Check if we already fetched this athlete's data for this cohort
     if (metricsCache.value[cacheKey]) {
@@ -124,8 +132,8 @@ export const useAthleteStore = defineStore('athlete', () => {
     }
   };
 
-  const setCohort = async (cohort: string) => {
-    if (cohort === currentCohort.value) return;
+  const setCohort = async (cohort: CohortSpec) => {
+    if (cohortToString(cohort) === cohortToString(currentCohort.value)) return;
     currentCohort.value = cohort;
     if (selectedAthlete.value) {
       await fetchAthleteMetrics(selectedAthlete.value, { cohort });

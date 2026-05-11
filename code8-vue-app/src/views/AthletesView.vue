@@ -48,6 +48,78 @@ const saveEdit = async () => {
 };
 const isStaff = computed(() => authStore.userRole === 'admin' || authStore.userRole === 'coach');
 
+// Tag editing state
+const tagEditingUid = ref<string | null>(null);
+const tagEditField = ref<'SportsTags' | 'PositionsTags' | null>(null);
+const tagDraft = ref<string>('');
+const tagSaving = ref<Record<string, boolean>>({});
+
+const startTagEdit = (uid: string, field: 'SportsTags' | 'PositionsTags', current: string[] | null | undefined) => {
+  tagEditingUid.value = uid;
+  tagEditField.value = field;
+  tagDraft.value = (current || []).join(', ');
+};
+const cancelTagEdit = () => {
+  tagEditingUid.value = null;
+  tagEditField.value = null;
+  tagDraft.value = '';
+};
+const saveTagEdit = async () => {
+  if (!tagEditingUid.value || !tagEditField.value) return;
+  const uid = tagEditingUid.value;
+  const field = tagEditField.value;
+  const tags = tagDraft.value.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+  tagSaving.value[`${uid}:${field}`] = true;
+  try {
+    const fn = httpsCallable(functions, 'update_athlete_info');
+    const payload: any = { athlete_uid: uid };
+    payload[field] = tags;
+    const res = await fn(payload);
+    if ((res.data as any).status === 'success') {
+      const idx = store.roster.findIndex(a => a.athlete_uid === uid);
+      if (idx !== -1) store.roster[idx] = { ...store.roster[idx], [field]: tags };
+    }
+  } catch { /* ignore */ }
+  finally {
+    delete tagSaving.value[`${uid}:${field}`];
+    cancelTagEdit();
+  }
+};
+const acceptProposedTags = async (a: any, field: 'SportsTags' | 'PositionsTags') => {
+  const proposed = a.proposed_tags?.[field] || [];
+  if (!proposed.length) return;
+  tagSaving.value[`${a.athlete_uid}:${field}`] = true;
+  try {
+    const fn = httpsCallable(functions, 'update_athlete_info');
+    const payload: any = { athlete_uid: a.athlete_uid };
+    payload[field] = proposed;
+    const res = await fn(payload);
+    if ((res.data as any).status === 'success') {
+      const idx = store.roster.findIndex(x => x.athlete_uid === a.athlete_uid);
+      if (idx !== -1) store.roster[idx] = { ...store.roster[idx], [field]: proposed };
+    }
+  } catch { /* ignore */ }
+  finally { delete tagSaving.value[`${a.athlete_uid}:${field}`]; }
+};
+
+// Run tag backfill (proposes tags for all athletes; doesn't overwrite curated)
+const tagsBackfillRunning = ref(false);
+const tagsBackfillResult = ref<any>(null);
+const runTagsBackfill = async () => {
+  tagsBackfillRunning.value = true;
+  tagsBackfillResult.value = null;
+  try {
+    const fn = httpsCallable(functions, 'backfill_athlete_tags');
+    const res = await fn({});
+    tagsBackfillResult.value = res.data;
+    await store.forceRefreshRoster();
+  } catch (e: any) {
+    tagsBackfillResult.value = { status: 'error', message: e.message || 'Backfill failed' };
+  } finally {
+    tagsBackfillRunning.value = false;
+  }
+};
+
 onMounted(async () => {
   store.fetchRoster();
   if (isStaff.value) { fetchValor(); fetchHdAthletes(); }
@@ -484,6 +556,13 @@ const handleCsvUpload = async () => {
             <div class="p-4">
               <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
                 <p class="text-xs text-gray-500">{{ store.roster.length }} athletes · click any cell to edit · indicators: HD, V, S</p>
+                <button @click="runTagsBackfill" :disabled="tagsBackfillRunning" class="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-code8-dark text-white rounded-md hover:bg-gray-800 disabled:opacity-50">
+                  <span v-if="tagsBackfillRunning" class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                  {{ tagsBackfillRunning ? 'Proposing...' : 'Propose Tags' }}
+                </button>
+              </div>
+              <div v-if="tagsBackfillResult" class="mb-3 p-2 rounded-lg text-xs" :class="tagsBackfillResult.status === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'">
+                {{ tagsBackfillResult.summary || tagsBackfillResult.message }}
               </div>
 
               <div class="overflow-x-auto border border-gray-200 rounded-lg">
@@ -503,6 +582,8 @@ const handleCsvUpload = async () => {
                       <th class="px-3 py-2 text-center" title="Limb Dominance">Limb</th>
                       <th class="px-3 py-2 text-left">Sports</th>
                       <th class="px-3 py-2 text-left">Positions</th>
+                      <th class="px-3 py-2 text-left">Sport Tags</th>
+                      <th class="px-3 py-2 text-left">Position Tags</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -581,6 +662,38 @@ const handleCsvUpload = async () => {
                       <td class="px-3 py-2 text-gray-700 max-w-[140px] truncate">
                         <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'Positions'" @click="startEdit(a.athlete_uid!, 'Positions', a.Positions)" class="cursor-text" :title="a.Positions || ''">{{ a.Positions || '—' }}</span>
                         <input v-else v-model="editingValue" @keyup.enter="saveEdit" @keyup.escape="cancelEdit" @blur="saveEdit" type="text" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                      </td>
+
+                      <!-- Sport Tags -->
+                      <td class="px-3 py-2 text-gray-700 max-w-[200px]">
+                        <div v-if="tagEditingUid !== a.athlete_uid || tagEditField !== 'SportsTags'" class="flex flex-wrap gap-1 items-center">
+                          <span v-for="t in (a.SportsTags || [])" :key="'st-'+t" class="px-1.5 py-0.5 text-[10px] font-semibold bg-code8-gold/10 text-code8-dark border border-code8-gold/30 rounded">{{ t }}</span>
+                          <button @click="startTagEdit(a.athlete_uid!, 'SportsTags', a.SportsTags)" class="text-[10px] text-gray-400 hover:text-gray-700 underline">edit</button>
+                          <button v-if="(a.SportsTags || []).length === 0 && a.proposed_tags?.SportsTags?.length" @click="acceptProposedTags(a, 'SportsTags')" :disabled="!!tagSaving[a.athlete_uid + ':SportsTags']" class="text-[10px] text-code8-gold hover:text-yellow-600 font-semibold">
+                            accept ({{ a.proposed_tags.SportsTags.join(', ') }})
+                          </button>
+                        </div>
+                        <div v-else class="flex gap-1">
+                          <input v-model="tagDraft" @keyup.enter="saveTagEdit" @keyup.escape="cancelTagEdit" placeholder="football, basketball" class="flex-1 px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                          <button @click="saveTagEdit" class="text-[10px] text-green-600 font-semibold">save</button>
+                          <button @click="cancelTagEdit" class="text-[10px] text-gray-400">cancel</button>
+                        </div>
+                      </td>
+
+                      <!-- Position Tags -->
+                      <td class="px-3 py-2 text-gray-700 max-w-[220px]">
+                        <div v-if="tagEditingUid !== a.athlete_uid || tagEditField !== 'PositionsTags'" class="flex flex-wrap gap-1 items-center">
+                          <span v-for="t in (a.PositionsTags || [])" :key="'pt-'+t" class="px-1.5 py-0.5 text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 rounded">{{ t }}</span>
+                          <button @click="startTagEdit(a.athlete_uid!, 'PositionsTags', a.PositionsTags)" class="text-[10px] text-gray-400 hover:text-gray-700 underline">edit</button>
+                          <button v-if="(a.PositionsTags || []).length === 0 && a.proposed_tags?.PositionsTags?.length" @click="acceptProposedTags(a, 'PositionsTags')" :disabled="!!tagSaving[a.athlete_uid + ':PositionsTags']" class="text-[10px] text-code8-gold hover:text-yellow-600 font-semibold">
+                            accept ({{ a.proposed_tags.PositionsTags.join(', ') }})
+                          </button>
+                        </div>
+                        <div v-else class="flex gap-1">
+                          <input v-model="tagDraft" @keyup.enter="saveTagEdit" @keyup.escape="cancelTagEdit" placeholder="football:qb, football:rb" class="flex-1 px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                          <button @click="saveTagEdit" class="text-[10px] text-green-600 font-semibold">save</button>
+                          <button @click="cancelTagEdit" class="text-[10px] text-gray-400">cancel</button>
+                        </div>
                       </td>
                     </tr>
                   </tbody>

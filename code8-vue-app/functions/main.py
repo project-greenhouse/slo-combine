@@ -233,6 +233,9 @@ def get_roster(req: https_fn.CallableRequest) -> any:
             "Sports": a.get("Sports"),
             "Positions": a.get("Positions"),
             "CurrentSchool": a.get("CurrentSchool"),
+            "SportsTags": a.get("SportsTags") or [],
+            "PositionsTags": a.get("PositionsTags") or [],
+            "proposed_tags": a.get("proposed_tags"),
         })
 
     roster_df = pd.DataFrame(roster_list)
@@ -256,7 +259,12 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
     athlete_name = data.get("Name")
     athlete_hawkin_id = data.get("HawkinID")
     athlete_valor_id = data.get("ValorID")
-    cohort = data.get("cohort") or "combine"  # 'combine' (dynamic) or 'elite' (static tables)
+    cohort = data.get("cohort") or "combine"
+    # cohort can be:
+    #   "combine" — dynamic cohort across all combine athletes (default)
+    #   "elite"   — static seeded reference tables
+    #   {"type": "sport"|"position"|"age", "value": str} — cohort filtered to athletes
+    #               whose tags / age bucket match `value`
 
     if not athlete_uid:
         return {"status": "error", "message": "No athlete_uid provided"}
@@ -275,10 +283,74 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
         rank as _rank, best as _best,
         gather_dynamic_cohort_firestore, gather_dynamic_cohort_hd, gather_static_cohort,
     )
+    from athlete_tags import age_bucket as _age_bucket
+
+    # --- Resolve cohort to a set of athlete_uids + HawkinIDs (for HD filter) ---
+    cohort_label = cohort if isinstance(cohort, str) else f"{cohort.get('type')}:{cohort.get('value')}"
+    cohort_athlete_uids = None  # None => no filter (all athletes)
+    cohort_hawkin_ids = None
+    if isinstance(cohort, dict) and cohort.get("type") in ("sport", "position", "age"):
+        ctype = cohort["type"]
+        cvalue = (cohort.get("value") or "").lower().strip()
+        uids = set()
+        hids = set()
+        for ad in db.collection("athlete_info").stream():
+            ad_d = ad.to_dict()
+            if ctype == "sport":
+                tags = [t.lower() for t in (ad_d.get("SportsTags") or [])]
+                if cvalue in tags:
+                    uids.add(ad.id)
+                    if ad_d.get("HawkinID"):
+                        hids.add(str(ad_d["HawkinID"]))
+            elif ctype == "position":
+                tags = [t.lower() for t in (ad_d.get("PositionsTags") or [])]
+                if cvalue in tags:
+                    uids.add(ad.id)
+                    if ad_d.get("HawkinID"):
+                        hids.add(str(ad_d["HawkinID"]))
+            elif ctype == "age":
+                if _age_bucket(ad_d.get("BirthDate")) == cvalue:
+                    uids.add(ad.id)
+                    if ad_d.get("HawkinID"):
+                        hids.add(str(ad_d["HawkinID"]))
+        cohort_athlete_uids = uids
+        cohort_hawkin_ids = hids
 
     def _build_cohort_combine_firestore(collection_name, extractor):
-        """Combine cohort = all values across all athletes' docs in this collection."""
-        return gather_dynamic_cohort_firestore(db, collection_name, extractor)
+        """Cohort values: stream collection, filter by athlete_uids if set."""
+        if cohort_athlete_uids is None:
+            return gather_dynamic_cohort_firestore(db, collection_name, extractor)
+        # Filter to specific athlete_uids
+        values = []
+        for doc in db.collection(collection_name).stream():
+            d = doc.to_dict()
+            if d.get("athlete_uid") not in cohort_athlete_uids:
+                continue
+            v = extractor(d)
+            if v is not None:
+                try:
+                    values.append(float(v))
+                except (TypeError, ValueError):
+                    pass
+        return values
+
+    def _build_cohort_hd(hd_tests, field):
+        """HD cohort: filter by athlete_id matching cohort_hawkin_ids if set."""
+        if not hd_tests:
+            return []
+        if cohort_hawkin_ids is None:
+            return gather_dynamic_cohort_hd(hd_tests, field)
+        values = []
+        for t in hd_tests:
+            if str(t.get("athlete_id") or "") not in cohort_hawkin_ids:
+                continue
+            v = t.get(field)
+            if v is not None:
+                try:
+                    values.append(float(v))
+                except (TypeError, ValueError):
+                    pass
+        return values
 
     def _extract_sprint40(d):
         if d.get("Distance") in [40, "40"] and d.get("Total"):
@@ -318,16 +390,16 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
             vert_cohort = gather_static_cohort(db, "combine_percentiles", "VerticalJump")
             broad_cohort = gather_static_cohort(db, "combine_percentiles", "BroadJump")
         else:
-            # Dynamic cohort = all combine athletes ever tested
+            # Dynamic cohort — possibly filtered by athlete cohort_uids
             sprint_cohort = _build_cohort_combine_firestore("sprint40", _extract_sprint40)
             proagil_cohort = _build_cohort_combine_firestore("pro_agility", _extract_proagility)
             vert_cohort = _build_cohort_combine_firestore("standing_vert", _extract_vert)
             broad_cohort = _build_cohort_combine_firestore("broad_jump", _extract_broad)
 
-        ranks["sprint40"] = _rank(athlete_sprint, sprint_cohort, lower_is_better=True, cohort_label=cohort)
-        ranks["proAgility"] = _rank(athlete_proagil, proagil_cohort, lower_is_better=True, cohort_label=cohort)
-        ranks["verticalJump"] = _rank(athlete_vert, vert_cohort, cohort_label=cohort)
-        ranks["broadJump"] = _rank(athlete_broad, broad_cohort, cohort_label=cohort)
+        ranks["sprint40"] = _rank(athlete_sprint, sprint_cohort, lower_is_better=True, cohort_label=cohort_label)
+        ranks["proAgility"] = _rank(athlete_proagil, proagil_cohort, lower_is_better=True, cohort_label=cohort_label)
+        ranks["verticalJump"] = _rank(athlete_vert, vert_cohort, cohort_label=cohort_label)
+        ranks["broadJump"] = _rank(athlete_broad, broad_cohort, cohort_label=cohort_label)
     except Exception as e:
         print(f"Error calculating combine ranks: {e}")
         
@@ -368,11 +440,11 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                     jh_cohort = gather_static_cohort(db, "fp_percentiles", "JumpHeight")
                     mrsi_cohort = gather_static_cohort(db, "fp_percentiles", "mRSI")
                 else:
-                    jh_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ"], "jump_height_m")
-                    mrsi_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ"], "mrsi")
+                    jh_cohort = _build_cohort_hd(hd_cache["CMJ"], "jump_height_m")
+                    mrsi_cohort = _build_cohort_hd(hd_cache["CMJ"], "mrsi")
 
-                ranks["fp_jump_height"] = _rank(best_jh, jh_cohort, cohort_label=cohort)
-                ranks["fp_mrsi"] = _rank(best_mrsi, mrsi_cohort, cohort_label=cohort)
+                ranks["fp_jump_height"] = _rank(best_jh, jh_cohort, cohort_label=cohort_label)
+                ranks["fp_mrsi"] = _rank(best_mrsi, mrsi_cohort, cohort_label=cohort_label)
 
                 metrics["force_plate_cmj"] = [{
                     "Jump Height (in)": (r["jump_height_m"] * 39.3701) if r.get("jump_height_m") is not None else None,
@@ -436,22 +508,32 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                             pass
                 best_ratio = min(ratios) if ratios else None
 
-                jh_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_jump_height_m")
-                rsi_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_rsi")
-                stiff_cohort = gather_dynamic_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_stiffness_n_m")
-                ratio_cohort = []
-                for t in (hd_cache["CMJ_REBOUND"] or []):
+                # CMJ Rebound has no static elite table — always uses dynamic cohort.
+                # If a sport/position/age cohort is selected, filter accordingly.
+                jh_cohort_r = _build_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_jump_height_m")
+                rsi_cohort_r = _build_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_rsi")
+                stiff_cohort_r = _build_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_stiffness_n_m")
+                ratio_cohort_r = []
+                cohort_tests = (
+                    [t for t in (hd_cache["CMJ_REBOUND"] or []) if str(t.get("athlete_id") or "") in cohort_hawkin_ids]
+                    if cohort_hawkin_ids is not None
+                    else (hd_cache["CMJ_REBOUND"] or [])
+                )
+                for t in cohort_tests:
                     rj, cj = t.get("rebound_jump_height_m"), t.get("cmj_jump_height_m")
                     if rj and cj:
                         try:
-                            ratio_cohort.append(float(cj) / float(rj))
+                            ratio_cohort_r.append(float(cj) / float(rj))
                         except Exception:
                             pass
 
-                ranks["cmj_rebound_jump_height"] = _rank(best_rebound_jh, jh_cohort, cohort_label="combine")
-                ranks["cmj_rebound_rsi"] = _rank(best_rebound_rsi, rsi_cohort, cohort_label="combine")
-                ranks["cmj_rebound_stiffness"] = _rank(best_rebound_stiffness, stiff_cohort, lower_is_better=True, cohort_label="combine")
-                ranks["cmj_rebound_jump_height_ratio"] = _rank(best_ratio, ratio_cohort, lower_is_better=True, cohort_label="combine")
+                # For CMJ Rebound, label always reflects the requested cohort
+                # ('elite' falls through to dynamic since no static table exists).
+                rebound_label = cohort_label if cohort != "elite" else "combine"
+                ranks["cmj_rebound_jump_height"] = _rank(best_rebound_jh, jh_cohort_r, cohort_label=rebound_label)
+                ranks["cmj_rebound_rsi"] = _rank(best_rebound_rsi, rsi_cohort_r, cohort_label=rebound_label)
+                ranks["cmj_rebound_stiffness"] = _rank(best_rebound_stiffness, stiff_cohort_r, lower_is_better=True, cohort_label=rebound_label)
+                ranks["cmj_rebound_jump_height_ratio"] = _rank(best_ratio, ratio_cohort_r, lower_is_better=True, cohort_label=rebound_label)
 
             # Debug info to help diagnose missing data per athlete
             metrics["_hd_debug"] = {
@@ -994,6 +1076,15 @@ def update_athlete_info(req: https_fn.CallableRequest) -> any:
     for key in ["Name", "Email", "BirthDate", "Gender", "GradYear", "SchoolGrade", "HeightInches", "LimbDominance", "Sports", "Positions", "CurrentSchool", "ValorID", "HawkinID", "SwiftID"]:
         if key in data:
             update_data[key] = data[key]
+    # Array fields (tags). Accept either an array or a comma-separated string for ergonomic POSTs.
+    for key in ["SportsTags", "PositionsTags"]:
+        if key in data:
+            val = data[key]
+            if isinstance(val, str):
+                val = [t.strip() for t in val.split(",") if t.strip()]
+            elif not isinstance(val, list):
+                val = []
+            update_data[key] = val
             
     if not uid:
         doc_ref = db.collection("athlete_info").document()
@@ -1136,6 +1227,55 @@ def get_data_dashboard(req: https_fn.CallableRequest) -> any:
 # ──────────────────────────────────────────────
 # Backfill: sync historic Swift IDs onto athlete_info
 # ──────────────────────────────────────────────
+
+@https_fn.on_call(memory=options.MemoryOption.MB_512, timeout_sec=300, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def backfill_athlete_tags(req: https_fn.CallableRequest) -> any:
+    """Propose SportsTags and PositionsTags for every athlete based on substring
+    matching against the curated taxonomy in athlete_tags.py. Writes proposed
+    arrays to a `proposed_tags` field so admin can review without overwriting
+    curated values. Safe to re-run."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    from athlete_tags import propose_sports_tags, propose_position_tags
+
+    proposed = 0
+    skipped = 0
+    examples = []
+    for doc in db.collection("athlete_info").stream():
+        d = doc.to_dict()
+        sports = propose_sports_tags(d.get("Sports"))
+        positions = propose_position_tags(d.get("Positions"), sports)
+        if not sports and not positions:
+            skipped += 1
+            continue
+        doc.reference.update({
+            "proposed_tags": {
+                "SportsTags": sports,
+                "PositionsTags": positions,
+                "generated_at": firestore.SERVER_TIMESTAMP,
+            }
+        })
+        proposed += 1
+        if len(examples) < 8:
+            examples.append({
+                "name": d.get("Name"),
+                "sports_text": d.get("Sports"),
+                "positions_text": d.get("Positions"),
+                "proposed_sports": sports,
+                "proposed_positions": positions,
+            })
+
+    return {
+        "status": "success",
+        "summary": f"Proposed tags for {proposed} athletes ({skipped} had no matchable text).",
+        "proposed": proposed,
+        "skipped": skipped,
+        "examples": examples,
+    }
+
 
 @https_fn.on_call(memory=options.MemoryOption.MB_512, timeout_sec=300, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
 @safe_execute

@@ -74,7 +74,7 @@ const fetchLatestSummary = () => {
 watch(() => store.selectedAthlete, fetchLatestSummary, { immediate: true });
 onUnmounted(() => { if (unsubscribe) unsubscribe(); });
 
-// --- Cohort selection (real, backend-driven; toggle buttons call store.setCohort directly) ---
+// --- Cohort selection (real, backend-driven) ---
 
 // Rank object shape: { percentile: number, n: number, cohort: string } | null
 const rankPct = (r: any): number | null => {
@@ -83,15 +83,56 @@ const rankPct = (r: any): number | null => {
   if (typeof r === 'object' && typeof r.percentile === 'number') return r.percentile;
   return null;
 };
+const rankN = (r: any): number | null =>
+  (r && typeof r === 'object' && typeof r.n === 'number') ? r.n : null;
 const rankLabel = (rank: any) => {
   const v = rankPct(rank);
   if (v == null) return '--';
-  return `${Math.round(v)}th Pct`;
+  const n = rankN(rank);
+  const nLabel = n != null && n < 10 ? ` (n=${n})` : '';
+  return `${Math.round(v)}th Pct${nLabel}`;
+};
+const isLowConfidence = (rank: any) => {
+  const n = rankN(rank);
+  return n != null && n < 10;
 };
 const getDisplayRank = (metricType: string) => {
   const v = rankPct(store.metrics?.ranks?.[metricType]);
   return v == null ? '--' : Math.round(v);
 };
+
+// Compute age bucket from athlete's birth date for "Same Age Group" option
+const ageBucketOf = (birthDate: string | null | undefined): string | null => {
+  if (!birthDate) return null;
+  let year: number | null = null;
+  let m = birthDate.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) year = parseInt(m[1]);
+  if (year == null) { m = birthDate.match(/^(\d{1,2})-(\d{4})$/); if (m) year = parseInt(m[2]); }
+  if (year == null) { m = birthDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (m) year = parseInt(m[3]); }
+  if (year == null) return null;
+  const age = new Date().getFullYear() - year;
+  if (age < 12) return '11-';
+  if (age <= 14) return '12-14';
+  if (age <= 16) return '15-16';
+  if (age <= 18) return '17-18';
+  return '19+';
+};
+
+// Cohort dropdown change handler
+const handleCohortSelect = async (e: Event) => {
+  const v = (e.target as HTMLSelectElement).value;
+  if (v === 'combine' || v === 'elite') {
+    await store.setCohort(v);
+  } else {
+    const [type, ...rest] = v.split(':');
+    await store.setCohort({ type: type as any, value: rest.join(':') });
+  }
+};
+
+const cohortValueString = computed(() => {
+  const c = store.currentCohort;
+  return typeof c === 'string' ? c : `${c.type}:${c.value}`;
+});
 
 const fpCmjData = computed(() => store.metrics?.force_plate_cmj || []);
 const fpCmjReboundData = computed(() => store.metrics?.force_plate_cmj_rebound || []);
@@ -113,9 +154,10 @@ const hasSpeedData = computed(() => {
 const getRankClass = (rank: any) => {
   const val = rankPct(rank);
   if (val == null) return 'hidden';
-  if (val >= 75) return 'bg-code8-green/10 text-code8-green border-code8-green';
-  if (val >= 25) return 'bg-code8-amber/10 text-yellow-600 border-code8-amber';
-  return 'bg-code8-red/10 text-code8-red border-code8-red';
+  const dim = isLowConfidence(rank) ? ' opacity-60' : '';
+  if (val >= 75) return 'bg-code8-green/10 text-code8-green border-code8-green' + dim;
+  if (val >= 25) return 'bg-code8-amber/10 text-yellow-600 border-code8-amber' + dim;
+  return 'bg-code8-red/10 text-code8-red border-code8-red' + dim;
 };
 
 // --- ECharts Configurations ---
@@ -300,10 +342,19 @@ const printReport = () => {
         </div>
         <div class="flex flex-col items-end gap-1">
           <span class="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Compare against</span>
-          <div class="flex bg-gray-100 p-1 rounded-lg border border-gray-200 shadow-sm text-sm">
-            <button @click="store.setCohort('combine')" :class="['px-3 py-1.5 rounded-md font-semibold transition-colors', store.currentCohort === 'combine' ? 'bg-white text-code8-dark shadow' : 'text-gray-500 hover:text-gray-700']">Combine Athletes</button>
-            <button @click="store.setCohort('elite')" :class="['px-3 py-1.5 rounded-md font-semibold transition-colors', store.currentCohort === 'elite' ? 'bg-white text-code8-dark shadow' : 'text-gray-500 hover:text-gray-700']">Elite Benchmarks</button>
-          </div>
+          <select :value="cohortValueString" @change="handleCohortSelect" class="text-sm bg-white border border-gray-300 rounded-md px-3 py-1.5 font-semibold text-code8-dark shadow-sm focus:outline-none focus:ring-1 focus:ring-code8-gold focus:border-code8-gold">
+            <option value="combine">Combine Athletes (All)</option>
+            <option value="elite">Elite Benchmarks</option>
+            <optgroup label="Same Sport" v-if="store.selectedAthlete?.SportsTags?.length">
+              <option v-for="t in store.selectedAthlete.SportsTags" :key="'cs-'+t" :value="`sport:${t}`">Sport: {{ t }}</option>
+            </optgroup>
+            <optgroup label="Same Position" v-if="store.selectedAthlete?.PositionsTags?.length">
+              <option v-for="t in store.selectedAthlete.PositionsTags" :key="'cp-'+t" :value="`position:${t}`">Position: {{ t }}</option>
+            </optgroup>
+            <optgroup label="Same Age Group" v-if="ageBucketOf(store.selectedAthlete?.BirthDate)">
+              <option :value="`age:${ageBucketOf(store.selectedAthlete?.BirthDate)}`">Age {{ ageBucketOf(store.selectedAthlete?.BirthDate) }}</option>
+            </optgroup>
+          </select>
         </div>
       </div>
     </div>

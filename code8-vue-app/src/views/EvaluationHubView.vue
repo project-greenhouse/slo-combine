@@ -43,9 +43,36 @@ const bestBroadDoc = computed(() => {
 const fpCmjData = computed(() => store.metrics?.force_plate_cmj || []);
 const fpCmjReboundData = computed(() => store.metrics?.force_plate_cmj_rebound || []);
 
+// Cohort dropdown: handle plain string (combine|elite) AND structured (sport:football, etc.)
 const handleCohortChange = async (e: Event) => {
   const v = (e.target as HTMLSelectElement).value;
-  await store.setCohort(v);
+  if (v === 'combine' || v === 'elite') {
+    await store.setCohort(v);
+  } else {
+    const [type, ...rest] = v.split(':');
+    await store.setCohort({ type: type as any, value: rest.join(':') });
+  }
+};
+
+const cohortValueString = computed(() => {
+  const c = store.currentCohort;
+  return typeof c === 'string' ? c : `${c.type}:${c.value}`;
+});
+
+const ageBucketOf = (birthDate: string | null | undefined): string | null => {
+  if (!birthDate) return null;
+  let year: number | null = null;
+  let m = birthDate.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) year = parseInt(m[1]);
+  if (year == null) { m = birthDate.match(/^(\d{1,2})-(\d{4})$/); if (m) year = parseInt(m[2]); }
+  if (year == null) { m = birthDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (m) year = parseInt(m[3]); }
+  if (year == null) return null;
+  const age = new Date().getFullYear() - year;
+  if (age < 12) return '11-';
+  if (age <= 14) return '12-14';
+  if (age <= 16) return '15-16';
+  if (age <= 18) return '17-18';
+  return '19+';
 };
 
 // Process Sprint Data: Group by ActivityIdentifier to form discrete trials
@@ -96,20 +123,27 @@ const rankPct = (r: any): number | null => {
   if (typeof r === 'object' && typeof r.percentile === 'number') return r.percentile;
   return null;
 };
-// Phase 2 will expose cohort `n` count in the UI; keeping the helper for then.
-// const rankN = (r: any): number | null => (r && typeof r === 'object' && typeof r.n === 'number') ? r.n : null;
+const rankN = (r: any): number | null =>
+  (r && typeof r === 'object' && typeof r.n === 'number') ? r.n : null;
+const isLowConfidence = (r: any) => {
+  const n = rankN(r);
+  return n != null && n < 10;
+};
 
 const getRankClass = (rank: any) => {
   const v = rankPct(rank);
   if (v == null) return 'hidden';
-  if (v >= 75) return 'bg-code8-green/10 text-code8-green border-code8-green';
-  if (v >= 25) return 'bg-code8-amber/10 text-yellow-600 border-code8-amber';
-  return 'bg-code8-red/10 text-code8-red border-code8-red';
+  const dim = isLowConfidence(rank) ? ' opacity-60' : '';
+  if (v >= 75) return 'bg-code8-green/10 text-code8-green border-code8-green' + dim;
+  if (v >= 25) return 'bg-code8-amber/10 text-yellow-600 border-code8-amber' + dim;
+  return 'bg-code8-red/10 text-code8-red border-code8-red' + dim;
 };
 const rankLabel = (rank: any) => {
   const v = rankPct(rank);
   if (v == null) return '';
-  return `${Math.round(v)}th Pct`;
+  const n = rankN(rank);
+  const nLabel = n != null && n < 10 ? ` (n=${n})` : '';
+  return `${Math.round(v)}th Pct${nLabel}`;
 };
 
 // Valor Specific Score Coloring
@@ -264,9 +298,18 @@ const formatDate = (timestamp: any) => {
     <!-- Cohort selector -->
     <div v-if="store.selectedAthlete" class="flex items-center gap-2 mb-4">
       <label class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Compare against:</label>
-      <select :value="store.currentCohort" @change="handleCohortChange" class="text-sm bg-white border border-gray-300 rounded-md px-3 py-1 focus:outline-none focus:ring-1 focus:ring-code8-gold focus:border-code8-gold">
-        <option value="combine">Combine Athletes</option>
+      <select :value="cohortValueString" @change="handleCohortChange" class="text-sm bg-white border border-gray-300 rounded-md px-3 py-1 focus:outline-none focus:ring-1 focus:ring-code8-gold focus:border-code8-gold">
+        <option value="combine">Combine Athletes (All)</option>
         <option value="elite">Elite Benchmarks</option>
+        <optgroup label="Same Sport" v-if="store.selectedAthlete?.SportsTags?.length">
+          <option v-for="t in store.selectedAthlete.SportsTags" :key="'cs-'+t" :value="`sport:${t}`">Sport: {{ t }}</option>
+        </optgroup>
+        <optgroup label="Same Position" v-if="store.selectedAthlete?.PositionsTags?.length">
+          <option v-for="t in store.selectedAthlete.PositionsTags" :key="'cp-'+t" :value="`position:${t}`">Position: {{ t }}</option>
+        </optgroup>
+        <optgroup label="Same Age Group" v-if="ageBucketOf(store.selectedAthlete?.BirthDate)">
+          <option :value="`age:${ageBucketOf(store.selectedAthlete?.BirthDate)}`">Age {{ ageBucketOf(store.selectedAthlete?.BirthDate) }}</option>
+        </optgroup>
       </select>
       <span v-if="store.metricsLoading" class="text-xs text-gray-400 animate-pulse">Loading...</span>
     </div>
