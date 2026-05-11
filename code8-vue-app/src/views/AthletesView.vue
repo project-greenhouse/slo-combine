@@ -9,8 +9,116 @@ const store = useAthleteStore();
 const authStore = useAuthStore();
 
 const searchQuery = ref('');
-const rightTab = ref<'profile' | 'manage'>('profile');
+const rightTab = ref<'profile' | 'manage' | 'table'>('profile');
+
+// Table tab: column-level inline editing
+const editingCell = ref<{ uid: string; field: string } | null>(null);
+const editingValue = ref<string>('');
+const saveSpinner = ref<Record<string, boolean>>({});
+
+const startEdit = (uid: string, field: string, currentValue: any) => {
+  editingCell.value = { uid, field };
+  editingValue.value = currentValue == null ? '' : String(currentValue);
+};
+
+const cancelEdit = () => {
+  editingCell.value = null;
+  editingValue.value = '';
+};
+
+const saveEdit = async () => {
+  if (!editingCell.value) return;
+  const { uid, field } = editingCell.value;
+  const value = editingValue.value;
+  saveSpinner.value[`${uid}:${field}`] = true;
+  try {
+    const fn = httpsCallable(functions, 'update_athlete_info');
+    const payload: any = { athlete_uid: uid };
+    payload[field] = value;
+    const res = await fn(payload);
+    if ((res.data as any).status === 'success') {
+      const idx = store.roster.findIndex(a => a.athlete_uid === uid);
+      if (idx !== -1) store.roster[idx] = { ...store.roster[idx], [field]: value };
+    }
+  } catch { /* ignore */ }
+  finally {
+    delete saveSpinner.value[`${uid}:${field}`];
+    cancelEdit();
+  }
+};
 const isStaff = computed(() => authStore.userRole === 'admin' || authStore.userRole === 'coach');
+
+// Tag editing state
+const tagEditingUid = ref<string | null>(null);
+const tagEditField = ref<'SportsTags' | 'PositionsTags' | null>(null);
+const tagDraft = ref<string>('');
+const tagSaving = ref<Record<string, boolean>>({});
+
+const startTagEdit = (uid: string, field: 'SportsTags' | 'PositionsTags', current: string[] | null | undefined) => {
+  tagEditingUid.value = uid;
+  tagEditField.value = field;
+  tagDraft.value = (current || []).join(', ');
+};
+const cancelTagEdit = () => {
+  tagEditingUid.value = null;
+  tagEditField.value = null;
+  tagDraft.value = '';
+};
+const saveTagEdit = async () => {
+  if (!tagEditingUid.value || !tagEditField.value) return;
+  const uid = tagEditingUid.value;
+  const field = tagEditField.value;
+  const tags = tagDraft.value.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+  tagSaving.value[`${uid}:${field}`] = true;
+  try {
+    const fn = httpsCallable(functions, 'update_athlete_info');
+    const payload: any = { athlete_uid: uid };
+    payload[field] = tags;
+    const res = await fn(payload);
+    if ((res.data as any).status === 'success') {
+      const idx = store.roster.findIndex(a => a.athlete_uid === uid);
+      if (idx !== -1) store.roster[idx] = { ...store.roster[idx], [field]: tags };
+    }
+  } catch { /* ignore */ }
+  finally {
+    delete tagSaving.value[`${uid}:${field}`];
+    cancelTagEdit();
+  }
+};
+const acceptProposedTags = async (a: any, field: 'SportsTags' | 'PositionsTags') => {
+  const proposed = a.proposed_tags?.[field] || [];
+  if (!proposed.length) return;
+  tagSaving.value[`${a.athlete_uid}:${field}`] = true;
+  try {
+    const fn = httpsCallable(functions, 'update_athlete_info');
+    const payload: any = { athlete_uid: a.athlete_uid };
+    payload[field] = proposed;
+    const res = await fn(payload);
+    if ((res.data as any).status === 'success') {
+      const idx = store.roster.findIndex(x => x.athlete_uid === a.athlete_uid);
+      if (idx !== -1) store.roster[idx] = { ...store.roster[idx], [field]: proposed };
+    }
+  } catch { /* ignore */ }
+  finally { delete tagSaving.value[`${a.athlete_uid}:${field}`]; }
+};
+
+// Run tag backfill (proposes tags for all athletes; doesn't overwrite curated)
+const tagsBackfillRunning = ref(false);
+const tagsBackfillResult = ref<any>(null);
+const runTagsBackfill = async () => {
+  tagsBackfillRunning.value = true;
+  tagsBackfillResult.value = null;
+  try {
+    const fn = httpsCallable(functions, 'backfill_athlete_tags');
+    const res = await fn({});
+    tagsBackfillResult.value = res.data;
+    await store.forceRefreshRoster();
+  } catch (e: any) {
+    tagsBackfillResult.value = { status: 'error', message: e.message || 'Backfill failed' };
+  } finally {
+    tagsBackfillRunning.value = false;
+  }
+};
 
 onMounted(async () => {
   store.fetchRoster();
@@ -41,8 +149,24 @@ const bestAgility = computed(() => {
   raw.forEach((r: any) => { if ((r.Distance == 20 || r.Distance == '20') && Number(r.Total) > 0 && Number(r.Total) < best) best = Number(r.Total); });
   return best === Infinity ? '--' : best.toFixed(2) + 's';
 });
-const bestVert = computed(() => { const r = store.metrics?.standing_vert || []; return r.length && r[0].VerticalJump ? r[0].VerticalJump + '"' : '--'; });
-const bestBroad = computed(() => { const r = store.metrics?.broad_jump || []; return r.length && r[0].BestBroadJump ? r[0].BestBroadJump + '"' : '--'; });
+const bestVert = computed(() => {
+  const rows = store.metrics?.standing_vert || [];
+  let best = 0;
+  for (const r of rows) {
+    const v = Number(r.VertInches ?? r.VerticalJump);
+    if (v > best) best = v;
+  }
+  return best > 0 ? `${best}"` : '--';
+});
+const bestBroad = computed(() => {
+  const rows = store.metrics?.broad_jump || [];
+  let best = 0;
+  for (const r of rows) {
+    const v = Number(r.BestInches ?? r.BestBroadJump);
+    if (v > best) best = v;
+  }
+  return best > 0 ? `${best}"` : '--';
+});
 
 // ── Edit Modal ──
 const showEditModal = ref(false);
@@ -346,6 +470,7 @@ const handleCsvUpload = async () => {
         <!-- Tab bar (staff only) -->
         <div v-if="isStaff" class="flex border-b border-gray-200 flex-shrink-0">
           <button @click="rightTab = 'profile'" :class="['flex-1 py-3 text-sm font-semibold text-center transition-colors', rightTab === 'profile' ? 'text-code8-gold border-b-2 border-code8-gold' : 'text-gray-500 hover:text-gray-700']">Profile</button>
+          <button @click="rightTab = 'table'" :class="['flex-1 py-3 text-sm font-semibold text-center transition-colors', rightTab === 'table' ? 'text-code8-gold border-b-2 border-code8-gold' : 'text-gray-500 hover:text-gray-700']">Table</button>
           <button @click="rightTab = 'manage'" :class="['flex-1 py-3 text-sm font-semibold text-center transition-colors', rightTab === 'manage' ? 'text-code8-gold border-b-2 border-code8-gold' : 'text-gray-500 hover:text-gray-700']">Manage</button>
         </div>
 
@@ -423,6 +548,158 @@ const handleCsvUpload = async () => {
               <svg class="w-16 h-16 text-gray-200 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
               <h3 class="text-xl font-bold text-gray-900 mb-1">Select an Athlete</h3>
               <p class="text-sm text-gray-500">Choose from the roster to view their profile.</p>
+            </div>
+          </template>
+
+          <!-- ═══ TABLE TAB ═══ -->
+          <template v-if="rightTab === 'table'">
+            <div class="p-4">
+              <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <p class="text-xs text-gray-500">{{ store.roster.length }} athletes · click any cell to edit · indicators: HD, V, S</p>
+                <button @click="runTagsBackfill" :disabled="tagsBackfillRunning" class="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-code8-dark text-white rounded-md hover:bg-gray-800 disabled:opacity-50">
+                  <span v-if="tagsBackfillRunning" class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                  {{ tagsBackfillRunning ? 'Proposing...' : 'Propose Tags' }}
+                </button>
+              </div>
+              <div v-if="tagsBackfillResult" class="mb-3 p-2 rounded-lg text-xs" :class="tagsBackfillResult.status === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'">
+                {{ tagsBackfillResult.summary || tagsBackfillResult.message }}
+              </div>
+
+              <div class="overflow-x-auto border border-gray-200 rounded-lg">
+                <table class="w-full text-sm">
+                  <thead class="bg-gray-50 text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                    <tr>
+                      <th class="px-3 py-2 text-left sticky left-0 bg-gray-50 z-10">Name</th>
+                      <th class="px-3 py-2 text-left">Email</th>
+                      <th class="px-2 py-2 text-center" title="Hawkin Dynamics">HD</th>
+                      <th class="px-2 py-2 text-center" title="Valor">V</th>
+                      <th class="px-2 py-2 text-center" title="Swift">S</th>
+                      <th class="px-3 py-2 text-left">School</th>
+                      <th class="px-3 py-2 text-center">Grad</th>
+                      <th class="px-3 py-2 text-center">Birth</th>
+                      <th class="px-3 py-2 text-center">Gender</th>
+                      <th class="px-3 py-2 text-center">Height</th>
+                      <th class="px-3 py-2 text-center" title="Limb Dominance">Limb</th>
+                      <th class="px-3 py-2 text-left">Sports</th>
+                      <th class="px-3 py-2 text-left">Positions</th>
+                      <th class="px-3 py-2 text-left">Sport Tags</th>
+                      <th class="px-3 py-2 text-left">Position Tags</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="a in store.roster" :key="a.athlete_uid!" class="border-t border-gray-100 hover:bg-gray-50">
+                      <!-- Name (sticky, click to view profile) -->
+                      <td class="px-3 py-2 sticky left-0 bg-white hover:bg-gray-50 font-medium text-gray-900 max-w-[180px] truncate cursor-pointer" @click="store.selectAthlete(a); rightTab = 'profile';" :title="a.Name">{{ a.Name }}</td>
+
+                      <!-- Email -->
+                      <td class="px-3 py-2 text-gray-700 max-w-[200px] truncate">
+                        <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'Email'" @click="startEdit(a.athlete_uid!, 'Email', a.Email)" class="cursor-text" :class="!a.Email ? 'text-red-500 italic' : ''">
+                          {{ a.Email || '— add email —' }}
+                        </span>
+                        <input v-else v-model="editingValue" @keyup.enter="saveEdit" @keyup.escape="cancelEdit" @blur="saveEdit" type="email" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                      </td>
+
+                      <!-- HD/V/S indicators -->
+                      <td class="px-2 py-2 text-center"><span :class="a.HawkinID ? 'text-green-500' : 'text-gray-300'">●</span></td>
+                      <td class="px-2 py-2 text-center"><span :class="a.ValorID ? 'text-green-500' : 'text-gray-300'">●</span></td>
+                      <td class="px-2 py-2 text-center"><span :class="a.SwiftID ? 'text-green-500' : 'text-gray-300'">●</span></td>
+
+                      <!-- School -->
+                      <td class="px-3 py-2 text-gray-700 max-w-[160px] truncate">
+                        <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'CurrentSchool'" @click="startEdit(a.athlete_uid!, 'CurrentSchool', a.CurrentSchool)" class="cursor-text" :title="a.CurrentSchool || ''">{{ a.CurrentSchool || '—' }}</span>
+                        <input v-else v-model="editingValue" @keyup.enter="saveEdit" @keyup.escape="cancelEdit" @blur="saveEdit" type="text" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                      </td>
+
+                      <!-- Grad Year -->
+                      <td class="px-3 py-2 text-center text-gray-700">
+                        <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'GradYear'" @click="startEdit(a.athlete_uid!, 'GradYear', a.GradYear)" class="cursor-text">{{ a.GradYear || '—' }}</span>
+                        <input v-else v-model="editingValue" @keyup.enter="saveEdit" @keyup.escape="cancelEdit" @blur="saveEdit" type="text" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                      </td>
+
+                      <!-- Birth Date -->
+                      <td class="px-3 py-2 text-center text-gray-700 text-xs whitespace-nowrap">
+                        <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'BirthDate'" @click="startEdit(a.athlete_uid!, 'BirthDate', a.BirthDate)" class="cursor-text">{{ a.BirthDate || '—' }}</span>
+                        <input v-else v-model="editingValue" @keyup.enter="saveEdit" @keyup.escape="cancelEdit" @blur="saveEdit" type="text" placeholder="YYYY-MM-DD" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                      </td>
+
+                      <!-- Gender -->
+                      <td class="px-3 py-2 text-center text-gray-700">
+                        <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'Gender'" @click="startEdit(a.athlete_uid!, 'Gender', a.Gender)" class="cursor-text">{{ a.Gender || '—' }}</span>
+                        <select v-else v-model="editingValue" @change="saveEdit" @blur="saveEdit" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs">
+                          <option value="">--</option>
+                          <option value="M">M</option>
+                          <option value="F">F</option>
+                          <option value="male">male</option>
+                          <option value="female">female</option>
+                        </select>
+                      </td>
+
+                      <!-- Height -->
+                      <td class="px-3 py-2 text-center text-gray-700">
+                        <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'HeightInches'" @click="startEdit(a.athlete_uid!, 'HeightInches', a.HeightInches)" class="cursor-text">{{ a.HeightInches || '—' }}</span>
+                        <input v-else v-model="editingValue" @keyup.enter="saveEdit" @keyup.escape="cancelEdit" @blur="saveEdit" type="number" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                      </td>
+
+                      <!-- Limb -->
+                      <td class="px-3 py-2 text-center text-gray-700">
+                        <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'LimbDominance'" @click="startEdit(a.athlete_uid!, 'LimbDominance', a.LimbDominance)" class="cursor-text">{{ a.LimbDominance || '—' }}</span>
+                        <select v-else v-model="editingValue" @change="saveEdit" @blur="saveEdit" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs">
+                          <option value="">--</option>
+                          <option value="R">R</option>
+                          <option value="L">L</option>
+                          <option value="Right">Right</option>
+                          <option value="Left">Left</option>
+                        </select>
+                      </td>
+
+                      <!-- Sports -->
+                      <td class="px-3 py-2 text-gray-700 max-w-[140px] truncate">
+                        <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'Sports'" @click="startEdit(a.athlete_uid!, 'Sports', a.Sports)" class="cursor-text" :title="a.Sports || ''">{{ a.Sports || '—' }}</span>
+                        <input v-else v-model="editingValue" @keyup.enter="saveEdit" @keyup.escape="cancelEdit" @blur="saveEdit" type="text" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                      </td>
+
+                      <!-- Positions -->
+                      <td class="px-3 py-2 text-gray-700 max-w-[140px] truncate">
+                        <span v-if="editingCell?.uid !== a.athlete_uid || editingCell?.field !== 'Positions'" @click="startEdit(a.athlete_uid!, 'Positions', a.Positions)" class="cursor-text" :title="a.Positions || ''">{{ a.Positions || '—' }}</span>
+                        <input v-else v-model="editingValue" @keyup.enter="saveEdit" @keyup.escape="cancelEdit" @blur="saveEdit" type="text" class="w-full px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                      </td>
+
+                      <!-- Sport Tags -->
+                      <td class="px-3 py-2 text-gray-700 max-w-[200px]">
+                        <div v-if="tagEditingUid !== a.athlete_uid || tagEditField !== 'SportsTags'" class="flex flex-wrap gap-1 items-center">
+                          <span v-for="t in (a.SportsTags || [])" :key="'st-'+t" class="px-1.5 py-0.5 text-[10px] font-semibold bg-code8-gold/10 text-code8-dark border border-code8-gold/30 rounded">{{ t }}</span>
+                          <button @click="startTagEdit(a.athlete_uid!, 'SportsTags', a.SportsTags)" class="text-[10px] text-gray-400 hover:text-gray-700 underline">edit</button>
+                          <button v-if="(a.SportsTags || []).length === 0 && a.proposed_tags?.SportsTags?.length" @click="acceptProposedTags(a, 'SportsTags')" :disabled="!!tagSaving[a.athlete_uid + ':SportsTags']" class="text-[10px] text-code8-gold hover:text-yellow-600 font-semibold">
+                            accept ({{ a.proposed_tags.SportsTags.join(', ') }})
+                          </button>
+                        </div>
+                        <div v-else class="flex gap-1">
+                          <input v-model="tagDraft" @keyup.enter="saveTagEdit" @keyup.escape="cancelTagEdit" placeholder="football, basketball" class="flex-1 px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                          <button @click="saveTagEdit" class="text-[10px] text-green-600 font-semibold">save</button>
+                          <button @click="cancelTagEdit" class="text-[10px] text-gray-400">cancel</button>
+                        </div>
+                      </td>
+
+                      <!-- Position Tags -->
+                      <td class="px-3 py-2 text-gray-700 max-w-[220px]">
+                        <div v-if="tagEditingUid !== a.athlete_uid || tagEditField !== 'PositionsTags'" class="flex flex-wrap gap-1 items-center">
+                          <span v-for="t in (a.PositionsTags || [])" :key="'pt-'+t" class="px-1.5 py-0.5 text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 rounded">{{ t }}</span>
+                          <button @click="startTagEdit(a.athlete_uid!, 'PositionsTags', a.PositionsTags)" class="text-[10px] text-gray-400 hover:text-gray-700 underline">edit</button>
+                          <button v-if="(a.PositionsTags || []).length === 0 && a.proposed_tags?.PositionsTags?.length" @click="acceptProposedTags(a, 'PositionsTags')" :disabled="!!tagSaving[a.athlete_uid + ':PositionsTags']" class="text-[10px] text-code8-gold hover:text-yellow-600 font-semibold">
+                            accept ({{ a.proposed_tags.PositionsTags.join(', ') }})
+                          </button>
+                        </div>
+                        <div v-else class="flex gap-1">
+                          <input v-model="tagDraft" @keyup.enter="saveTagEdit" @keyup.escape="cancelTagEdit" placeholder="football:qb, football:rb" class="flex-1 px-1 py-0.5 border border-code8-gold rounded text-xs" autofocus />
+                          <button @click="saveTagEdit" class="text-[10px] text-green-600 font-semibold">save</button>
+                          <button @click="cancelTagEdit" class="text-[10px] text-gray-400">cancel</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="text-xs text-gray-400 mt-2">Use the "+ Add" menu in the page header to add a new athlete.</p>
             </div>
           </template>
 

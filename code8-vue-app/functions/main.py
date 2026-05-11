@@ -28,7 +28,7 @@ def _hd_client() -> HawkinClient:
 # Cache for HD tests to make rapid clicking in the UI instantaneous
 hd_cache = {
     "CMJ": None,
-    "MR": None
+    "CMJ_REBOUND": None,
 }
 
 valor_cache = {
@@ -233,6 +233,9 @@ def get_roster(req: https_fn.CallableRequest) -> any:
             "Sports": a.get("Sports"),
             "Positions": a.get("Positions"),
             "CurrentSchool": a.get("CurrentSchool"),
+            "SportsTags": a.get("SportsTags") or [],
+            "PositionsTags": a.get("PositionsTags") or [],
+            "proposed_tags": a.get("proposed_tags"),
         })
 
     roster_df = pd.DataFrame(roster_list)
@@ -256,44 +259,147 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
     athlete_name = data.get("Name")
     athlete_hawkin_id = data.get("HawkinID")
     athlete_valor_id = data.get("ValorID")
+    cohort = data.get("cohort") or "combine"
+    # cohort can be:
+    #   "combine" — dynamic cohort across all combine athletes (default)
+    #   "elite"   — static seeded reference tables
+    #   {"type": "sport"|"position"|"age", "value": str} — cohort filtered to athletes
+    #               whose tags / age bucket match `value`
 
     if not athlete_uid:
         return {"status": "error", "message": "No athlete_uid provided"}
-        
+
     collections = ["sprint40", "pro_agility", "standing_vert", "broad_jump"]
     metrics = {}
     ranks = {}
-    
+
     for col in collections:
         docs = db.collection(col).where("athlete_uid", "==", athlete_uid).stream()
         # Convert firestore docs to dicts
         metrics[col] = [doc.to_dict() for doc in docs]
 
-    # --- Calculate Combine Percentiles ---
+    # --- Calculate Percentile Ranks via percentile_engine ---
+    from percentile_engine import (
+        rank as _rank, best as _best,
+        gather_dynamic_cohort_firestore, gather_dynamic_cohort_hd, gather_static_cohort,
+    )
+    from athlete_tags import age_bucket as _age_bucket
+
+    # --- Resolve cohort to a set of athlete_uids + HawkinIDs (for HD filter) ---
+    cohort_label = cohort if isinstance(cohort, str) else f"{cohort.get('type')}:{cohort.get('value')}"
+    cohort_athlete_uids = None  # None => no filter (all athletes)
+    cohort_hawkin_ids = None
+    if isinstance(cohort, dict) and cohort.get("type") in ("sport", "position", "age"):
+        ctype = cohort["type"]
+        cvalue = (cohort.get("value") or "").lower().strip()
+        uids = set()
+        hids = set()
+        for ad in db.collection("athlete_info").stream():
+            ad_d = ad.to_dict()
+            if ctype == "sport":
+                tags = [t.lower() for t in (ad_d.get("SportsTags") or [])]
+                if cvalue in tags:
+                    uids.add(ad.id)
+                    if ad_d.get("HawkinID"):
+                        hids.add(str(ad_d["HawkinID"]))
+            elif ctype == "position":
+                tags = [t.lower() for t in (ad_d.get("PositionsTags") or [])]
+                if cvalue in tags:
+                    uids.add(ad.id)
+                    if ad_d.get("HawkinID"):
+                        hids.add(str(ad_d["HawkinID"]))
+            elif ctype == "age":
+                if _age_bucket(ad_d.get("BirthDate")) == cvalue:
+                    uids.add(ad.id)
+                    if ad_d.get("HawkinID"):
+                        hids.add(str(ad_d["HawkinID"]))
+        cohort_athlete_uids = uids
+        cohort_hawkin_ids = hids
+
+    def _build_cohort_combine_firestore(collection_name, extractor):
+        """Cohort values: stream collection, filter by athlete_uids if set."""
+        if cohort_athlete_uids is None:
+            return gather_dynamic_cohort_firestore(db, collection_name, extractor)
+        # Filter to specific athlete_uids
+        values = []
+        for doc in db.collection(collection_name).stream():
+            d = doc.to_dict()
+            if d.get("athlete_uid") not in cohort_athlete_uids:
+                continue
+            v = extractor(d)
+            if v is not None:
+                try:
+                    values.append(float(v))
+                except (TypeError, ValueError):
+                    pass
+        return values
+
+    def _build_cohort_hd(hd_tests, field):
+        """HD cohort: filter by athlete_id matching cohort_hawkin_ids if set."""
+        if not hd_tests:
+            return []
+        if cohort_hawkin_ids is None:
+            return gather_dynamic_cohort_hd(hd_tests, field)
+        values = []
+        for t in hd_tests:
+            if str(t.get("athlete_id") or "") not in cohort_hawkin_ids:
+                continue
+            v = t.get(field)
+            if v is not None:
+                try:
+                    values.append(float(v))
+                except (TypeError, ValueError):
+                    pass
+        return values
+
+    def _extract_sprint40(d):
+        if d.get("Distance") in [40, "40"] and d.get("Total"):
+            try: return float(d["Total"])
+            except (TypeError, ValueError): return None
+        return None
+
+    def _extract_proagility(d):
+        if d.get("Distance") in [20, "20"] and d.get("Total"):
+            try: return float(d["Total"])
+            except (TypeError, ValueError): return None
+        return None
+
+    def _extract_vert(d):
+        return d.get("VertInches") or d.get("VerticalJump")
+
+    def _extract_broad(d):
+        return d.get("BestInches") or d.get("BestBroadJump")
+
     try:
-        combine_pct = [d.to_dict() for d in db.collection("combine_percentiles").stream()]
-        if combine_pct:
-            pct_df = pd.DataFrame(combine_pct).sort_values("Percentile")
-            
-            # Sprint 40 (Lower time is better, so array is reversed for numpy interp)
-            sprints = [float(s["Total"]) for s in metrics.get("sprint40", []) if s.get("Distance") in [40, "40"] and s.get("Total")]
-            if sprints:
-                ranks["sprint40"] = round(float(np.interp(min(sprints), pct_df["Sprint40"].values[::-1], pct_df["Percentile"].values[::-1])), 1)
-                
-            # Pro Agility
-            agils = [float(a["Total"]) for a in metrics.get("pro_agility", []) if a.get("Distance") in [20, "20"] and a.get("Total")]
-            if agils:
-                ranks["proAgility"] = round(float(np.interp(min(agils), pct_df["ProAgility"].values[::-1], pct_df["Percentile"].values[::-1])), 1)
+        # Athlete's own best values
+        athlete_sprint = _best(
+            [_extract_sprint40(s) for s in metrics.get("sprint40", [])],
+            lower_is_better=True,
+        )
+        athlete_proagil = _best(
+            [_extract_proagility(a) for a in metrics.get("pro_agility", [])],
+            lower_is_better=True,
+        )
+        athlete_vert = _best([_extract_vert(v) for v in metrics.get("standing_vert", [])])
+        athlete_broad = _best([_extract_broad(b) for b in metrics.get("broad_jump", [])])
 
-            # Vertical
-            verts = [float(v["VerticalJump"]) for v in metrics.get("standing_vert", []) if v.get("VerticalJump")]
-            if verts:
-                ranks["verticalJump"] = round(float(np.interp(max(verts), pct_df["VerticalJump"].values, pct_df["Percentile"].values)), 1)
+        if cohort == "elite":
+            # Static seeded reference tables = "Elite Benchmarks" cohort
+            sprint_cohort = gather_static_cohort(db, "combine_percentiles", "Sprint40")
+            proagil_cohort = gather_static_cohort(db, "combine_percentiles", "ProAgility")
+            vert_cohort = gather_static_cohort(db, "combine_percentiles", "VerticalJump")
+            broad_cohort = gather_static_cohort(db, "combine_percentiles", "BroadJump")
+        else:
+            # Dynamic cohort — possibly filtered by athlete cohort_uids
+            sprint_cohort = _build_cohort_combine_firestore("sprint40", _extract_sprint40)
+            proagil_cohort = _build_cohort_combine_firestore("pro_agility", _extract_proagility)
+            vert_cohort = _build_cohort_combine_firestore("standing_vert", _extract_vert)
+            broad_cohort = _build_cohort_combine_firestore("broad_jump", _extract_broad)
 
-            # Broad
-            broads = [float(b["BestBroadJump"]) for b in metrics.get("broad_jump", []) if b.get("BestBroadJump")]
-            if broads:
-                ranks["broadJump"] = round(float(np.interp(max(broads), pct_df["BroadJump"].values, pct_df["Percentile"].values)), 1)
+        ranks["sprint40"] = _rank(athlete_sprint, sprint_cohort, lower_is_better=True, cohort_label=cohort_label)
+        ranks["proAgility"] = _rank(athlete_proagil, proagil_cohort, lower_is_better=True, cohort_label=cohort_label)
+        ranks["verticalJump"] = _rank(athlete_vert, vert_cohort, cohort_label=cohort_label)
+        ranks["broadJump"] = _rank(athlete_broad, broad_cohort, cohort_label=cohort_label)
     except Exception as e:
         print(f"Error calculating combine ranks: {e}")
         
@@ -313,22 +419,32 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                     if matched:
                         return matched
                 if athlete_name:
-                    return [r for r in rows if r.get("athlete_name") == athlete_name]
+                    target = athlete_name.lower().strip()
+                    return [r for r in rows if (r.get("athlete_name") or "").lower().strip() == target]
                 return []
 
-            # Countermovement Jump
+            # Countermovement Jump — cache only when we successfully resolved a type ID
             if hd_cache["CMJ"] is None:
                 cmj_type_id = client.find_test_type_id("CMJ")
-                hd_cache["CMJ"] = client.get_tests(test_type_id=cmj_type_id, from_ts=from_ts, to_ts=to_ts) if cmj_type_id else []
+                if cmj_type_id:
+                    hd_cache["CMJ"] = client.get_tests(test_type_id=cmj_type_id, from_ts=from_ts, to_ts=to_ts)
+                # else: leave as None so we retry on the next request (instead of permanently caching [])
 
-            cmj_rows = _filter_for_athlete(hd_cache["CMJ"])
+            cmj_rows = _filter_for_athlete(hd_cache["CMJ"]) if hd_cache["CMJ"] else []
             if cmj_rows:
-                fp_pct = [d.to_dict() for d in db.collection("fp_percentiles").stream()]
-                first = cmj_rows[0]
-                if fp_pct and first.get("jump_height_m") is not None and first.get("mrsi") is not None:
-                    f_df = pd.DataFrame(fp_pct).sort_values("Percentile")
-                    ranks["fp_jump_height"] = round(float(np.interp(first["jump_height_m"], f_df["JumpHeight"].values, f_df["Percentile"].values)), 1)
-                    ranks["fp_mrsi"] = round(float(np.interp(first["mrsi"], f_df["mRSI"].values, f_df["Percentile"].values)), 1)
+                # Athlete's best CMJ values
+                best_jh = _best([r.get("jump_height_m") for r in cmj_rows])
+                best_mrsi = _best([r.get("mrsi") for r in cmj_rows])
+
+                if cohort == "elite":
+                    jh_cohort = gather_static_cohort(db, "fp_percentiles", "JumpHeight")
+                    mrsi_cohort = gather_static_cohort(db, "fp_percentiles", "mRSI")
+                else:
+                    jh_cohort = _build_cohort_hd(hd_cache["CMJ"], "jump_height_m")
+                    mrsi_cohort = _build_cohort_hd(hd_cache["CMJ"], "mrsi")
+
+                ranks["fp_jump_height"] = _rank(best_jh, jh_cohort, cohort_label=cohort_label)
+                ranks["fp_mrsi"] = _rank(best_mrsi, mrsi_cohort, cohort_label=cohort_label)
 
                 metrics["force_plate_cmj"] = [{
                     "Jump Height (in)": (r["jump_height_m"] * 39.3701) if r.get("jump_height_m") is not None else None,
@@ -337,22 +453,101 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                     "Braking Asymmetry": round(r["lr_braking_impulse_index"]) if r.get("lr_braking_impulse_index") is not None else None,
                 } for r in cmj_rows]
 
-            # Multi-Rebound
-            if hd_cache["MR"] is None:
-                mr_type_id = client.find_test_type_id("MR")
-                hd_cache["MR"] = client.get_tests(test_type_id=mr_type_id, from_ts=from_ts, to_ts=to_ts) if mr_type_id else []
+            # CMJ Rebound — cache only when we successfully resolved a type ID
+            if hd_cache["CMJ_REBOUND"] is None:
+                cmj_reb_id = client.find_test_type_id("CMJREB")
+                if cmj_reb_id:
+                    hd_cache["CMJ_REBOUND"] = client.get_tests(test_type_id=cmj_reb_id, from_ts=from_ts, to_ts=to_ts)
 
-            mr_rows = _filter_for_athlete(hd_cache["MR"])
-            if mr_rows:
-                metrics["force_plate_mr"] = [{
-                    "Number of Jumps": r.get("number_of_jumps_count"),
-                    "Avg Jump Height (in)": (r["avg_jump_height_m"] * 39.3701) if r.get("avg_jump_height_m") is not None else None,
-                    "Peak Jump Height (in)": (r["peak_jump_height_m"] * 39.3701) if r.get("peak_jump_height_m") is not None else None,
-                    "Avg RSI": r.get("avg_rsi"),
-                    "Peak RSI": r.get("peak_rsi"),
-                } for r in mr_rows]
+            cmj_reb_rows = _filter_for_athlete(hd_cache["CMJ_REBOUND"]) if hd_cache["CMJ_REBOUND"] else []
+            if cmj_reb_rows:
+                metrics["force_plate_cmj_rebound"] = []
+                for r in cmj_reb_rows:
+                    # Field names after hawkin_client.normalize_metric_key():
+                    #   "Rebound Jump Height(m)" → rebound_jump_height_m
+                    #   "Rebound RSI" → rebound_rsi
+                    #   "Rebound Stiffness(N/m)" → rebound_stiffness_n_m
+                    #   "CMJ Jump Height(m)" → cmj_jump_height_m
+                    rebound_jh_m = r.get("rebound_jump_height_m")
+                    cmj_jh_m = r.get("cmj_jump_height_m")
+                    # Jump Height Ratio = CMJ / Rebound
+                    ratio = None
+                    if rebound_jh_m and cmj_jh_m:
+                        try:
+                            ratio = round(float(cmj_jh_m) / float(rebound_jh_m), 3)
+                        except Exception:
+                            ratio = None
+
+                    metrics["force_plate_cmj_rebound"].append({
+                        "Rebound Jump Height (in)": (float(rebound_jh_m) * 39.3701) if rebound_jh_m is not None else None,
+                        "Rebound RSI": r.get("rebound_rsi"),
+                        "Rebound Stiffness": r.get("rebound_stiffness_n_m"),
+                        "Jump Height Ratio": ratio,
+                    })
+
+                # CMJ Rebound percentile ranks.
+                # No "elite" static table exists for these — only the dynamic combine cohort is meaningful.
+                # When cohort='elite' is requested, we still emit the dynamic ranks (best signal we have).
+                best_rebound_jh = _best([r.get("rebound_jump_height_m") for r in cmj_reb_rows])
+                best_rebound_rsi = _best([r.get("rebound_rsi") for r in cmj_reb_rows])
+                # Stiffness is signed (negative N/m); larger magnitude = stiffer.
+                # Take the most-negative value as "best" — implemented as min on raw values.
+                best_rebound_stiffness = _best(
+                    [r.get("rebound_stiffness_n_m") for r in cmj_reb_rows],
+                    lower_is_better=True,
+                )
+                # Jump Height Ratio = CMJ/Rebound; lower = better (rebound goes higher than CMJ).
+                ratios = []
+                for r in cmj_reb_rows:
+                    rj = r.get("rebound_jump_height_m")
+                    cj = r.get("cmj_jump_height_m")
+                    if rj and cj:
+                        try:
+                            ratios.append(float(cj) / float(rj))
+                        except Exception:
+                            pass
+                best_ratio = min(ratios) if ratios else None
+
+                # CMJ Rebound has no static elite table — always uses dynamic cohort.
+                # If a sport/position/age cohort is selected, filter accordingly.
+                jh_cohort_r = _build_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_jump_height_m")
+                rsi_cohort_r = _build_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_rsi")
+                stiff_cohort_r = _build_cohort_hd(hd_cache["CMJ_REBOUND"], "rebound_stiffness_n_m")
+                ratio_cohort_r = []
+                cohort_tests = (
+                    [t for t in (hd_cache["CMJ_REBOUND"] or []) if str(t.get("athlete_id") or "") in cohort_hawkin_ids]
+                    if cohort_hawkin_ids is not None
+                    else (hd_cache["CMJ_REBOUND"] or [])
+                )
+                for t in cohort_tests:
+                    rj, cj = t.get("rebound_jump_height_m"), t.get("cmj_jump_height_m")
+                    if rj and cj:
+                        try:
+                            ratio_cohort_r.append(float(cj) / float(rj))
+                        except Exception:
+                            pass
+
+                # For CMJ Rebound, label always reflects the requested cohort
+                # ('elite' falls through to dynamic since no static table exists).
+                rebound_label = cohort_label if cohort != "elite" else "combine"
+                ranks["cmj_rebound_jump_height"] = _rank(best_rebound_jh, jh_cohort_r, cohort_label=rebound_label)
+                ranks["cmj_rebound_rsi"] = _rank(best_rebound_rsi, rsi_cohort_r, cohort_label=rebound_label)
+                ranks["cmj_rebound_stiffness"] = _rank(best_rebound_stiffness, stiff_cohort_r, lower_is_better=True, cohort_label=rebound_label)
+                ranks["cmj_rebound_jump_height_ratio"] = _rank(best_ratio, ratio_cohort_r, lower_is_better=True, cohort_label=rebound_label)
+
+            # Debug info to help diagnose missing data per athlete
+            metrics["_hd_debug"] = {
+                "athlete_hawkin_id": athlete_hawkin_id,
+                "athlete_name_query": athlete_name,
+                "cmj_total_in_window": len(hd_cache["CMJ"] or []),
+                "cmj_matched_for_athlete": len(cmj_rows) if hd_cache["CMJ"] else None,
+                "cmj_rebound_total_in_window": len(hd_cache["CMJ_REBOUND"] or []),
+                "cmj_rebound_matched_for_athlete": len(cmj_reb_rows) if hd_cache["CMJ_REBOUND"] else None,
+                "cmj_rebound_sample_keys": list(cmj_reb_rows[0].keys()) if cmj_reb_rows else None,
+            }
     except Exception as e:
         print(f"Error fetching HD metrics: {e}")
+        metrics["_hd_debug"] = {"error": str(e)}
         
     # Fetch Valor Movement Data
     metrics["valor"] = {"Shoulder": 0, "Ankle": 0, "Hip": 0}
@@ -440,48 +635,212 @@ def set_user_role(req: https_fn.CallableRequest) -> any:
 
 @https_fn.on_call(memory=options.MemoryOption.GB_1, timeout_sec=120, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
 @safe_execute
+def parse_birthdate(s):
+    """Match an athlete's birth date across format variants:
+    '2010-08-15', '08-2010', '8/15/2010', etc. Returns (month, year) or None."""
+    if not s:
+        return None
+    s = str(s).strip()
+    # Try ISO YYYY-MM-DD
+    import re as _re
+    m = _re.match(r"^(\d{4})-(\d{1,2})-\d{1,2}$", s)
+    if m:
+        return (int(m.group(2)), int(m.group(1)))
+    # Try MM-YYYY (existing data style)
+    m = _re.match(r"^(\d{1,2})-(\d{4})$", s)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    # Try MM/DD/YYYY
+    m = _re.match(r"^(\d{1,2})/\d{1,2}/(\d{4})$", s)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    # Try YYYY/MM/DD
+    m = _re.match(r"^(\d{4})/(\d{1,2})/\d{1,2}$", s)
+    if m:
+        return (int(m.group(2)), int(m.group(1)))
+    return None
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_512, timeout_sec=60, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
 def register_athlete(req: https_fn.CallableRequest) -> any:
-    """Public endpoint for athletes to self-register. Validates against athlete_info."""
+    """Public endpoint for an athlete to verify their identity and create login.
+
+    Flow: athlete provides email + birthdate → we match against athlete_info →
+    if match, create Firebase Auth user with role:athlete custom claim and send
+    a password reset email so they can set their own password.
+    """
     email = req.data.get("email", "").strip()
-    password = req.data.get("password")
-    
-    if not email or not password:
-        return {"status": "error", "message": "Email and password are required."}
-        
-    # Stream all athletes and find a case-insensitive match for the email
+    birth_date = req.data.get("birthDate", "").strip()
+
+    if not email or not birth_date:
+        return {"status": "error", "message": "Email and birth date are required."}
+
+    target_month_year = parse_birthdate(birth_date)
+    if not target_month_year:
+        return {"status": "error", "message": "Could not parse birth date. Use YYYY-MM-DD format."}
+
     email_lower = email.lower()
-    docs = db.collection("athlete_info").stream()
-    athlete_doc = None
-    doc_id = None
-    for doc in docs:
+
+    # Find athlete_info by email (case-insensitive)
+    matched = None
+    matched_id = None
+    for doc in db.collection("athlete_info").stream():
         d = doc.to_dict()
-        doc_email = d.get("email") or d.get("Email")
+        doc_email = d.get("Email") or d.get("email")
         if doc_email and str(doc_email).strip().lower() == email_lower:
-            athlete_doc = d
-            doc_id = doc.id
+            matched = d
+            matched_id = doc.id
             break
-            
-    if not athlete_doc:
-        return {"status": "error", "message": "Email not found in the roster. Please ensure your email matches the one provided to your coach."}
-        
-    athlete_name = athlete_doc.get("Name")
-    
+
+    if not matched:
+        return {
+            "status": "error",
+            "code": "email_not_found",
+            "message": "We couldn't find an athlete with that email. If you don't have an email on file, request admin verification.",
+        }
+
+    # Verify birth date (month + year must match)
+    stored_birth = matched.get("BirthDate") or ""
+    stored_my = parse_birthdate(stored_birth)
+    if not stored_my or stored_my != target_month_year:
+        return {
+            "status": "error",
+            "code": "birth_mismatch",
+            "message": "The birth date doesn't match our records. Please double-check.",
+        }
+
+    athlete_name = matched.get("Name", "")
+
+    # Check if Firebase Auth user already exists for this email
     try:
-        user = firebase_auth.create_user(email=email, password=password)
+        existing = firebase_auth.get_user_by_email(email)
+        # Already exists — just (re)send password reset link
+        link = firebase_auth.generate_password_reset_link(email)
+        return {
+            "status": "exists",
+            "message": "An account already exists. Use 'Forgot password' to reset, or sign in directly.",
+            "athlete_name": athlete_name,
+            "reset_link": link,
+        }
+    except firebase_auth.UserNotFoundError:
+        pass
+
+    # Create Firebase Auth user with a placeholder password — they'll reset it
+    import secrets
+    temp_password = secrets.token_urlsafe(24)
+
+    try:
+        user = firebase_auth.create_user(email=email, password=temp_password, email_verified=False)
         firebase_auth.set_custom_user_claims(user.uid, {"role": "athlete", "athlete_name": athlete_name})
-        
-        # Update athlete_info with additional details from sign up
-        update_data = {}
-        for key in ["BirthDate", "BirthYear", "BirthMonth", "Gender", "GradYear", "SchoolGrade", "HeightInches", "LimbDominance", "Sports", "Positions", "CurrentSchool"]:
-            if key in req.data and req.data[key]:
-                update_data[key] = req.data[key]
-        
-        if update_data and doc_id:
-            db.collection("athlete_info").document(doc_id).update(update_data)
-            
-        return {"status": "success", "message": "Successfully registered."}
+
+        # Generate password reset link (sent by client via Firebase Auth SDK)
+        reset_link = firebase_auth.generate_password_reset_link(email)
+
+        # Stamp athlete_info with the auth uid
+        if matched_id:
+            db.collection("athlete_info").document(matched_id).update({"auth_uid": user.uid})
+
+        return {
+            "status": "success",
+            "message": f"Verified! Check your email at {email} to set your password.",
+            "athlete_name": athlete_name,
+            "reset_link": reset_link,
+        }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Failed to create account: {str(e)}"}
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def request_admin_verification(req: https_fn.CallableRequest) -> any:
+    """Public endpoint: athlete with no email on file requests admin add their email.
+    Writes to admin_requests collection for admin review."""
+    name = req.data.get("name", "").strip()
+    email = req.data.get("email", "").strip()
+    birth_date = req.data.get("birthDate", "").strip()
+    message = req.data.get("message", "").strip()
+
+    if not name or not email:
+        return {"status": "error", "message": "Name and email are required."}
+
+    db.collection("admin_requests").add({
+        "type": "athlete_verification",
+        "name": name,
+        "email": email,
+        "birthDate": birth_date,
+        "message": message,
+        "status": "pending",
+        "created_at": firestore.SERVER_TIMESTAMP,
+    })
+
+    return {"status": "success", "message": "Request received. An admin will review and contact you shortly."}
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def list_admin_requests(req: https_fn.CallableRequest) -> any:
+    """Admin/coach only: list pending verification requests."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    requests_out = []
+    for doc in db.collection("admin_requests").where("status", "==", "pending").stream():
+        d = doc.to_dict()
+        d["id"] = doc.id
+        # Convert timestamp to iso string for JSON
+        ts = d.get("created_at")
+        if ts and hasattr(ts, "isoformat"):
+            d["created_at"] = ts.isoformat()
+        requests_out.append(d)
+
+    # Sort by newest first
+    requests_out.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+    return {"status": "success", "data": requests_out}
+
+
+@https_fn.on_call(memory=options.MemoryOption.MB_256, timeout_sec=30, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def resolve_admin_request(req: https_fn.CallableRequest) -> any:
+    """Admin only: approve or reject a pending request.
+    On approve with athlete_uid, links the request's email to that athlete_info doc."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+    caller = firebase_auth.get_user(caller_uid)
+    if (caller.custom_claims or {}).get("role") != "admin":
+        return {"status": "error", "message": "Admin only."}
+
+    request_id = req.data.get("request_id")
+    action = req.data.get("action")  # 'approve' or 'reject'
+    athlete_uid = req.data.get("athlete_uid")  # required if approving
+
+    if not request_id or action not in ("approve", "reject"):
+        return {"status": "error", "message": "request_id and action ('approve'|'reject') required."}
+
+    request_ref = db.collection("admin_requests").document(request_id)
+    snap = request_ref.get()
+    if not snap.exists:
+        return {"status": "error", "message": "Request not found."}
+    request_data = snap.to_dict()
+
+    if action == "approve":
+        if not athlete_uid:
+            return {"status": "error", "message": "athlete_uid required to approve."}
+        # Update athlete_info with the email
+        db.collection("athlete_info").document(athlete_uid).update({
+            "Email": request_data.get("email"),
+        })
+
+    request_ref.update({
+        "status": "approved" if action == "approve" else "rejected",
+        "resolved_by": caller_uid,
+        "resolved_at": firestore.SERVER_TIMESTAMP,
+        "linked_athlete_uid": athlete_uid if action == "approve" else None,
+    })
+
+    return {"status": "success", "message": f"Request {action}d."}
 
 @https_fn.on_call(memory=options.MemoryOption.GB_1, timeout_sec=120, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
 @safe_execute
@@ -717,6 +1076,15 @@ def update_athlete_info(req: https_fn.CallableRequest) -> any:
     for key in ["Name", "Email", "BirthDate", "Gender", "GradYear", "SchoolGrade", "HeightInches", "LimbDominance", "Sports", "Positions", "CurrentSchool", "ValorID", "HawkinID", "SwiftID"]:
         if key in data:
             update_data[key] = data[key]
+    # Array fields (tags). Accept either an array or a comma-separated string for ergonomic POSTs.
+    for key in ["SportsTags", "PositionsTags"]:
+        if key in data:
+            val = data[key]
+            if isinstance(val, str):
+                val = [t.strip() for t in val.split(",") if t.strip()]
+            elif not isinstance(val, list):
+                val = []
+            update_data[key] = val
             
     if not uid:
         doc_ref = db.collection("athlete_info").document()
@@ -730,8 +1098,184 @@ def update_athlete_info(req: https_fn.CallableRequest) -> any:
 
 
 # ──────────────────────────────────────────────
+# Data Collection Dashboard
+# ──────────────────────────────────────────────
+
+@https_fn.on_call(memory=options.MemoryOption.MB_512, timeout_sec=60, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def get_data_dashboard(req: https_fn.CallableRequest) -> any:
+    """Return per-collection data ingestion stats: total count, last write,
+    counts for last 24h/7d/30d. Helps verify data is actually being collected."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    day_ago = now - datetime.timedelta(days=1)
+    week_ago = now - datetime.timedelta(days=7)
+    month_ago = now - datetime.timedelta(days=30)
+
+    def _to_dt(ts):
+        """Coerce Firestore timestamp / ISO string / DD/MM/YYYY string to datetime."""
+        if ts is None:
+            return None
+        # Firestore Timestamp (DatetimeWithNanoseconds)
+        if hasattr(ts, "timestamp") and not isinstance(ts, str):
+            try:
+                return ts if ts.tzinfo else ts.replace(tzinfo=datetime.timezone.utc)
+            except Exception:
+                pass
+        s = str(ts).strip()
+        # ISO 8601 (e.g. "2026-05-09T10:00:00-07:00")
+        try:
+            return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            pass
+        # Swift's "DD/MM/YYYYTHH:MM:SS AM" format
+        import re as _re
+        m = _re.match(r"^(\d{2})/(\d{2})/(\d{4})T(\d{2}):(\d{2}):(\d{2})\s*(AM|PM)?", s)
+        if m:
+            try:
+                day, mo, yr, hh, mm, ss, ampm = m.groups()
+                hh = int(hh)
+                if ampm == "PM" and hh < 12:
+                    hh += 12
+                if ampm == "AM" and hh == 12:
+                    hh = 0
+                return datetime.datetime(int(yr), int(mo), int(day), hh, int(mm), int(ss), tzinfo=datetime.timezone.utc)
+            except Exception:
+                pass
+        return None
+
+    def _summarize(collection_name, ts_field):
+        total = 0
+        last_24h = 0
+        last_7d = 0
+        last_30d = 0
+        latest_dt = None
+        latest_raw = None
+        try:
+            for doc in db.collection(collection_name).stream():
+                d = doc.to_dict()
+                total += 1
+                ts_raw = d.get(ts_field)
+                dt = _to_dt(ts_raw)
+                if dt:
+                    if dt > day_ago:
+                        last_24h += 1
+                    if dt > week_ago:
+                        last_7d += 1
+                    if dt > month_ago:
+                        last_30d += 1
+                    if latest_dt is None or dt > latest_dt:
+                        latest_dt = dt
+                        latest_raw = ts_raw
+        except Exception as e:
+            return {"error": str(e)}
+
+        return {
+            "total": total,
+            "last_24h": last_24h,
+            "last_7d": last_7d,
+            "last_30d": last_30d,
+            "latest": latest_dt.isoformat() if latest_dt else None,
+            "latest_raw": str(latest_raw) if latest_raw else None,
+            "ts_field": ts_field,
+        }
+
+    collections = {
+        "standing_reach": _summarize("standing_reach", "recorded_at"),
+        "standing_vert": _summarize("standing_vert", "recorded_at"),
+        "broad_jump": _summarize("broad_jump", "recorded_at"),
+        "sprint40": _summarize("sprint40", "ActivityTimestamp"),
+        "pro_agility": _summarize("pro_agility", "ActivityTimestamp"),
+        "athlete_summaries": _summarize("athlete_summaries", "created_at"),
+    }
+
+    # Athlete count + how many have email
+    athlete_total = 0
+    athletes_with_email = 0
+    athletes_with_hd = 0
+    athletes_with_valor = 0
+    athletes_with_swift = 0
+    for doc in db.collection("athlete_info").stream():
+        d = doc.to_dict()
+        athlete_total += 1
+        if d.get("Email"):
+            athletes_with_email += 1
+        if d.get("HawkinID"):
+            athletes_with_hd += 1
+        if d.get("ValorID"):
+            athletes_with_valor += 1
+        if d.get("SwiftID"):
+            athletes_with_swift += 1
+
+    return {
+        "status": "success",
+        "generated_at": now.isoformat(),
+        "collections": collections,
+        "athlete_info": {
+            "total": athlete_total,
+            "with_email": athletes_with_email,
+            "with_hd": athletes_with_hd,
+            "with_valor": athletes_with_valor,
+            "with_swift": athletes_with_swift,
+        },
+    }
+
+
+# ──────────────────────────────────────────────
 # Backfill: sync historic Swift IDs onto athlete_info
 # ──────────────────────────────────────────────
+
+@https_fn.on_call(memory=options.MemoryOption.MB_512, timeout_sec=300, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
+@safe_execute
+def backfill_athlete_tags(req: https_fn.CallableRequest) -> any:
+    """Propose SportsTags and PositionsTags for every athlete based on substring
+    matching against the curated taxonomy in athlete_tags.py. Writes proposed
+    arrays to a `proposed_tags` field so admin can review without overwriting
+    curated values. Safe to re-run."""
+    caller_uid, err = _require_staff(req)
+    if err:
+        return err
+
+    from athlete_tags import propose_sports_tags, propose_position_tags
+
+    proposed = 0
+    skipped = 0
+    examples = []
+    for doc in db.collection("athlete_info").stream():
+        d = doc.to_dict()
+        sports = propose_sports_tags(d.get("Sports"))
+        positions = propose_position_tags(d.get("Positions"), sports)
+        if not sports and not positions:
+            skipped += 1
+            continue
+        doc.reference.update({
+            "proposed_tags": {
+                "SportsTags": sports,
+                "PositionsTags": positions,
+                "generated_at": firestore.SERVER_TIMESTAMP,
+            }
+        })
+        proposed += 1
+        if len(examples) < 8:
+            examples.append({
+                "name": d.get("Name"),
+                "sports_text": d.get("Sports"),
+                "positions_text": d.get("Positions"),
+                "proposed_sports": sports,
+                "proposed_positions": positions,
+            })
+
+    return {
+        "status": "success",
+        "summary": f"Proposed tags for {proposed} athletes ({skipped} had no matchable text).",
+        "proposed": proposed,
+        "skipped": skipped,
+        "examples": examples,
+    }
+
 
 @https_fn.on_call(memory=options.MemoryOption.MB_512, timeout_sec=300, cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"]))
 @safe_execute
@@ -1025,11 +1569,11 @@ def check_hd_connection(req: https_fn.CallableRequest) -> any:
             "names_and_canonical": [{"name": t.get("name"), "canonicalId": t.get("canonicalId"), "id": t.get("id")} for t in types[:20]],
         })
         cmj_id = client.find_test_type_id("CMJ")
-        mr_id = client.find_test_type_id("MR")
+        cmj_reb_id = client.find_test_type_id("CMJREB")
         result["steps"].append({
             "step": "Test type matching",
             "CMJ_resolved_id": cmj_id,
-            "MR_resolved_id": mr_id,
+            "CMJ_Rebound_resolved_id": cmj_reb_id,
         })
     except Exception as e:
         return {"status": "error", "message": f"Test types fetch failed: {e}", "steps": result["steps"]}
@@ -1050,18 +1594,33 @@ def check_hd_connection(req: https_fn.CallableRequest) -> any:
                 "step": "CMJ tests with testTypeId filter",
                 "count": len(cmj_tests),
                 "sample_keys": list(cmj_tests[0].keys()) if cmj_tests else None,
-                "sample": cmj_tests[0] if cmj_tests else None,
             })
         else:
             result["steps"].append({"step": "CMJ tests", "skipped": "no test type ID resolved"})
 
-        # Also try without filter
+        if cmj_reb_id:
+            cmj_reb_tests = client.get_tests(test_type_id=cmj_reb_id, from_ts=from_ts, to_ts=to_ts)
+            sample = cmj_reb_tests[0] if cmj_reb_tests else None
+            # Surface the field names that look rebound-related so we can wire correct keys
+            rebound_field_candidates = [k for k in (sample.keys() if sample else []) if "rebound" in k.lower() or "stiffness" in k.lower() or "rsi" in k.lower() or "jump_height" in k.lower()]
+            result["steps"].append({
+                "step": "CMJ Rebound tests with testTypeId filter",
+                "count": len(cmj_reb_tests),
+                "sample_keys": list(sample.keys()) if sample else None,
+                "rebound_related_fields": rebound_field_candidates,
+                "sample_athlete": {"id": sample.get("athlete_id"), "name": sample.get("athlete_name")} if sample else None,
+            })
+        else:
+            result["steps"].append({"step": "CMJ Rebound tests", "skipped": "no test type ID resolved"})
+
+        # Also try without filter, group counts by test_type_name
         all_tests = client.get_tests(from_ts=from_ts, to_ts=to_ts)
-        unique_test_types = list({t.get("test_type_name") for t in all_tests})
+        from collections import Counter as _Counter
+        type_counts = _Counter(t.get("test_type_name") for t in all_tests)
         result["steps"].append({
             "step": "All tests in window (no filter)",
             "count": len(all_tests),
-            "unique_test_type_names": unique_test_types,
+            "tests_per_type": dict(sorted(type_counts.items(), key=lambda kv: -kv[1])),
         })
     except Exception as e:
         result["steps"].append({"step": "Tests fetch", "error": str(e)})

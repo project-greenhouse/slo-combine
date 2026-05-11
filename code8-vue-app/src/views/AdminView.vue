@@ -1,7 +1,163 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase/config';
+import { useAthleteStore } from '../stores/athleteStore';
+
+const athleteStore = useAthleteStore();
+
+// Pending verification requests
+interface AdminRequest {
+  id: string;
+  type: string;
+  name: string;
+  email: string;
+  birthDate?: string;
+  message?: string;
+  created_at?: string;
+}
+const pendingRequests = ref<AdminRequest[]>([]);
+const requestsLoading = ref(false);
+const requestActionState = ref<Record<string, { loading: boolean; selectedUid: string }>>({});
+const requestsToast = ref('');
+
+const fetchRequests = async () => {
+  requestsLoading.value = true;
+  try {
+    const fn = httpsCallable(functions, 'list_admin_requests');
+    const res = await fn({});
+    const d = res.data as any;
+    if (d.status === 'success') pendingRequests.value = d.data || [];
+  } catch { /* ignore */ }
+  finally { requestsLoading.value = false; }
+};
+
+const filteredAthletesForRequest = (_requestId: string, q: string) => {
+  if (!q) return [];
+  const lower = q.toLowerCase();
+  return athleteStore.roster
+    .filter(a => a.athlete_uid && (a.Name.toLowerCase().includes(lower) || (a.Email || '').toLowerCase().includes(lower)))
+    .slice(0, 8);
+};
+
+const athleteSearchByRequest = ref<Record<string, string>>({});
+
+const approveRequest = async (request: AdminRequest, athleteUid: string) => {
+  if (!athleteUid) {
+    requestsToast.value = 'Pick an athlete to link first.';
+    setTimeout(() => { requestsToast.value = ''; }, 3000);
+    return;
+  }
+  requestActionState.value[request.id] = { loading: true, selectedUid: athleteUid };
+  try {
+    const fn = httpsCallable(functions, 'resolve_admin_request');
+    const res = await fn({ request_id: request.id, action: 'approve', athlete_uid: athleteUid });
+    if ((res.data as any).status === 'success') {
+      pendingRequests.value = pendingRequests.value.filter(r => r.id !== request.id);
+      requestsToast.value = `Linked ${request.email} to athlete profile.`;
+      setTimeout(() => { requestsToast.value = ''; }, 3000);
+      await athleteStore.forceRefreshRoster();
+    }
+  } catch (e: any) {
+    requestsToast.value = e.message || 'Approve failed.';
+  } finally {
+    delete requestActionState.value[request.id];
+  }
+};
+
+const rejectRequest = async (request: AdminRequest) => {
+  requestActionState.value[request.id] = { loading: true, selectedUid: '' };
+  try {
+    const fn = httpsCallable(functions, 'resolve_admin_request');
+    const res = await fn({ request_id: request.id, action: 'reject' });
+    if ((res.data as any).status === 'success') {
+      pendingRequests.value = pendingRequests.value.filter(r => r.id !== request.id);
+      requestsToast.value = 'Request rejected.';
+      setTimeout(() => { requestsToast.value = ''; }, 3000);
+    }
+  } catch (e: any) {
+    requestsToast.value = e.message || 'Reject failed.';
+  } finally {
+    delete requestActionState.value[request.id];
+  }
+};
+
+const formatDate = (iso?: string) => {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+};
+
+const totalPending = computed(() => pendingRequests.value.length);
+
+// Data Collection Dashboard
+interface CollectionStats {
+  total: number;
+  last_24h: number;
+  last_7d: number;
+  last_30d: number;
+  latest: string | null;
+  latest_raw: string | null;
+  error?: string;
+}
+const dashboardLoading = ref(false);
+const dashboardData = ref<{
+  generated_at?: string;
+  collections?: Record<string, CollectionStats>;
+  athlete_info?: { total: number; with_email: number; with_hd: number; with_valor: number; with_swift: number };
+} | null>(null);
+
+const fetchDashboard = async () => {
+  dashboardLoading.value = true;
+  try {
+    const fn = httpsCallable(functions, 'get_data_dashboard');
+    const res = await fn({});
+    const d = res.data as any;
+    if (d.status === 'success') dashboardData.value = d;
+  } catch { /* ignore */ }
+  finally { dashboardLoading.value = false; }
+};
+
+const formatRelative = (iso?: string | null) => {
+  if (!iso) return 'never';
+  try {
+    const dt = new Date(iso);
+    const diffMs = Date.now() - dt.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.floor(diffHr / 24);
+    if (diffDay < 30) return `${diffDay}d ago`;
+    return dt.toLocaleDateString();
+  } catch { return iso; }
+};
+
+const formatAbsolute = (iso?: string | null) => {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+};
+
+const collectionLabels: Record<string, string> = {
+  standing_reach: 'Standing Reach',
+  standing_vert: 'Vertical Jump',
+  broad_jump: 'Broad Jump',
+  sprint40: '40yd Sprint (Swift)',
+  pro_agility: 'Pro Agility (Swift)',
+  athlete_summaries: 'Coach Summaries',
+};
+
+const isStale = (s?: CollectionStats) => {
+  if (!s) return false;
+  if (s.total === 0) return false; // never had data, not really "stale"
+  return s.last_7d === 0;
+};
+
+onMounted(() => {
+  fetchDashboard();
+  fetchRequests();
+  athleteStore.fetchRoster();
+});
 
 // Valor diagnostics
 const valorCheckLoading = ref(false);
@@ -108,6 +264,132 @@ const handleCreateUser = async () => {
 <template>
   <div class="max-w-2xl mx-auto">
     <h1 class="text-3xl font-bold text-gray-900 mb-6">Admin Portal</h1>
+
+    <!-- Data Collection Dashboard -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-xl font-bold text-gray-900">Data Collection</h2>
+          <p class="text-sm text-gray-500">Verify tests are being recorded across all sources.</p>
+        </div>
+        <button @click="fetchDashboard" :disabled="dashboardLoading" class="text-xs px-3 py-1.5 font-semibold bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 disabled:opacity-50">
+          {{ dashboardLoading ? '...' : 'Refresh' }}
+        </button>
+      </div>
+
+      <div v-if="dashboardLoading && !dashboardData" class="text-center py-8 text-gray-400 animate-pulse text-sm">Loading...</div>
+
+      <template v-else-if="dashboardData">
+        <!-- Athlete summary -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4 pb-4 border-b border-gray-100">
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-gray-900">{{ dashboardData.athlete_info?.total ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Athletes</p>
+          </div>
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-gray-900">{{ dashboardData.athlete_info?.with_email ?? 0 }}</p>
+            <p class="text-xs text-gray-500">With Email</p>
+          </div>
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-green-600">{{ dashboardData.athlete_info?.with_hd ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Linked HD</p>
+          </div>
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-green-600">{{ dashboardData.athlete_info?.with_valor ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Linked Valor</p>
+          </div>
+          <div class="text-center p-2 bg-gray-50 rounded-lg">
+            <p class="text-2xl font-bold text-green-600">{{ dashboardData.athlete_info?.with_swift ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Linked Swift</p>
+          </div>
+        </div>
+
+        <!-- Per-collection grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div v-for="(stats, key) in dashboardData.collections" :key="key"
+            :class="['p-4 rounded-xl border', isStale(stats) ? 'bg-yellow-50 border-yellow-200' : stats.last_24h ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200']">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="font-bold text-gray-900 text-sm">{{ collectionLabels[key] || key }}</h3>
+              <span v-if="isStale(stats)" class="text-xs font-semibold text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded">STALE</span>
+              <span v-else-if="stats.last_24h" class="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded">FRESH</span>
+            </div>
+            <div v-if="stats.error" class="text-xs text-red-600">Error: {{ stats.error }}</div>
+            <template v-else>
+              <p class="text-xs text-gray-600 mb-2">
+                Last write: <strong>{{ formatRelative(stats.latest) }}</strong>
+                <span v-if="stats.latest" class="text-gray-400">({{ formatAbsolute(stats.latest) }})</span>
+              </p>
+              <div class="grid grid-cols-4 gap-2 text-center">
+                <div><p class="text-xs text-gray-500">Total</p><p class="font-bold text-gray-900">{{ stats.total }}</p></div>
+                <div><p class="text-xs text-gray-500">24h</p><p class="font-bold" :class="stats.last_24h ? 'text-green-600' : 'text-gray-400'">{{ stats.last_24h }}</p></div>
+                <div><p class="text-xs text-gray-500">7d</p><p class="font-bold" :class="stats.last_7d ? 'text-green-600' : 'text-gray-400'">{{ stats.last_7d }}</p></div>
+                <div><p class="text-xs text-gray-500">30d</p><p class="font-bold text-gray-700">{{ stats.last_30d }}</p></div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <p class="text-xs text-gray-400 mt-3">Generated {{ formatRelative(dashboardData.generated_at) }} · STALE = no writes in past 7 days</p>
+      </template>
+    </div>
+
+    <!-- Pending Athlete Verification Requests -->
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-xl font-bold text-gray-900">Athlete Verification Requests</h2>
+          <p class="text-sm text-gray-500">Athletes who don't have an email on file have asked to be added.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span v-if="totalPending > 0" class="px-2 py-0.5 text-xs font-bold rounded-full bg-code8-gold/10 text-code8-dark border border-code8-gold/20">{{ totalPending }} pending</span>
+          <button @click="fetchRequests" :disabled="requestsLoading" class="text-xs px-3 py-1.5 font-semibold bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 disabled:opacity-50">
+            {{ requestsLoading ? '...' : 'Refresh' }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="requestsToast" class="mb-3 p-2 rounded-lg bg-green-100 text-green-800 text-sm font-medium">{{ requestsToast }}</div>
+
+      <div v-if="requestsLoading" class="text-center py-6 text-gray-400 text-sm animate-pulse">Loading requests...</div>
+      <div v-else-if="!pendingRequests.length" class="text-center py-6 text-gray-400 text-sm">No pending requests.</div>
+
+      <div v-else class="space-y-3">
+        <div v-for="r in pendingRequests" :key="r.id" class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+          <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+            <div class="flex-1 min-w-0">
+              <p class="font-bold text-gray-900">{{ r.name }}</p>
+              <p class="text-sm text-gray-700"><strong>Email:</strong> {{ r.email }}</p>
+              <p v-if="r.birthDate" class="text-sm text-gray-700"><strong>Birth Date:</strong> {{ r.birthDate }}</p>
+              <p v-if="r.message" class="text-sm text-gray-600 mt-1 italic">"{{ r.message }}"</p>
+              <p class="text-xs text-gray-400 mt-1">Submitted {{ formatDate(r.created_at) }}</p>
+            </div>
+          </div>
+
+          <!-- Athlete picker for approval -->
+          <div class="mt-3 pt-3 border-t border-gray-200">
+            <label class="block text-xs font-semibold text-gray-700 mb-1">Link this email to existing athlete:</label>
+            <div class="relative">
+              <input v-model="athleteSearchByRequest[r.id]" type="text" placeholder="Search athlete by name..." class="w-full bg-white border border-gray-300 rounded-md px-3 py-2 text-sm focus:border-code8-gold focus:ring-1 focus:ring-code8-gold outline-none" />
+              <div v-if="athleteSearchByRequest[r.id] && filteredAthletesForRequest(r.id, athleteSearchByRequest[r.id]).length" class="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-48 overflow-y-auto">
+                <button v-for="a in filteredAthletesForRequest(r.id, athleteSearchByRequest[r.id])" :key="a.athlete_uid!"
+                  @click="approveRequest(r, a.athlete_uid!)"
+                  :disabled="!!requestActionState[r.id]?.loading"
+                  class="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 border-b border-gray-50 last:border-0 disabled:opacity-50">
+                  <div class="font-medium text-gray-900">{{ a.Name }}</div>
+                  <div class="text-xs text-gray-500">{{ a.Email || 'No email on file' }} · {{ a.CurrentSchool || '' }}</div>
+                </button>
+              </div>
+            </div>
+
+            <div class="flex justify-end gap-2 mt-3">
+              <button @click="rejectRequest(r)" :disabled="!!requestActionState[r.id]?.loading" class="px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-md transition-colors disabled:opacity-50">
+                {{ requestActionState[r.id]?.loading ? '...' : 'Reject' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
       <h2 class="text-xl font-bold text-gray-900 mb-2">Manage User Roles</h2>

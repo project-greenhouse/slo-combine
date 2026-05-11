@@ -20,8 +20,60 @@ onMounted(() => {
 // Computed properties to safely extract arrays from the Firestore metrics
 const vertData = computed(() => store.metrics?.standing_vert || []);
 const broadData = computed(() => store.metrics?.broad_jump || []);
+
+// Pick the doc with the highest value, accept both legacy (VerticalJump) and new (VertInches) field names
+const bestVertDoc = computed(() => {
+  let best: any = null;
+  let bestVal = 0;
+  for (const r of vertData.value) {
+    const v = Number(r.VertInches ?? r.VerticalJump) || 0;
+    if (v > bestVal) { bestVal = v; best = r; }
+  }
+  return best;
+});
+const bestBroadDoc = computed(() => {
+  let best: any = null;
+  let bestVal = 0;
+  for (const r of broadData.value) {
+    const v = Number(r.BestInches ?? r.BestBroadJump) || 0;
+    if (v > bestVal) { bestVal = v; best = r; }
+  }
+  return best;
+});
 const fpCmjData = computed(() => store.metrics?.force_plate_cmj || []);
-const fpMrData = computed(() => store.metrics?.force_plate_mr || []);
+const fpCmjReboundData = computed(() => store.metrics?.force_plate_cmj_rebound || []);
+
+// Cohort dropdown: handle plain string (combine|elite) AND structured (sport:football, etc.)
+const handleCohortChange = async (e: Event) => {
+  const v = (e.target as HTMLSelectElement).value;
+  if (v === 'combine' || v === 'elite') {
+    await store.setCohort(v);
+  } else {
+    const [type, ...rest] = v.split(':');
+    await store.setCohort({ type: type as any, value: rest.join(':') });
+  }
+};
+
+const cohortValueString = computed(() => {
+  const c = store.currentCohort;
+  return typeof c === 'string' ? c : `${c.type}:${c.value}`;
+});
+
+const ageBucketOf = (birthDate: string | null | undefined): string | null => {
+  if (!birthDate) return null;
+  let year: number | null = null;
+  let m = birthDate.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) year = parseInt(m[1]);
+  if (year == null) { m = birthDate.match(/^(\d{1,2})-(\d{4})$/); if (m) year = parseInt(m[2]); }
+  if (year == null) { m = birthDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (m) year = parseInt(m[3]); }
+  if (year == null) return null;
+  const age = new Date().getFullYear() - year;
+  if (age < 12) return '11-';
+  if (age <= 14) return '12-14';
+  if (age <= 16) return '15-16';
+  if (age <= 18) return '17-18';
+  return '19+';
+};
 
 // Process Sprint Data: Group by ActivityIdentifier to form discrete trials
 const processedSprints = computed(() => {
@@ -63,12 +115,35 @@ const processedAgility = computed(() => {
   }));
 });
 
-// Rank Coloring Helper
-const getRankClass = (val: number | null | undefined) => {
-  if (!val) return 'hidden';
-  if (val >= 75) return 'bg-code8-green/10 text-code8-green border-code8-green';
-  if (val >= 25) return 'bg-code8-amber/10 text-yellow-600 border-code8-amber';
-  return 'bg-code8-red/10 text-code8-red border-code8-red';
+// Rank object shape: { percentile: number, n: number, cohort: string } | null
+// Helpers normalize across legacy raw-number and new object shapes for safety.
+const rankPct = (r: any): number | null => {
+  if (r == null) return null;
+  if (typeof r === 'number') return r;
+  if (typeof r === 'object' && typeof r.percentile === 'number') return r.percentile;
+  return null;
+};
+const rankN = (r: any): number | null =>
+  (r && typeof r === 'object' && typeof r.n === 'number') ? r.n : null;
+const isLowConfidence = (r: any) => {
+  const n = rankN(r);
+  return n != null && n < 10;
+};
+
+const getRankClass = (rank: any) => {
+  const v = rankPct(rank);
+  if (v == null) return 'hidden';
+  const dim = isLowConfidence(rank) ? ' opacity-60' : '';
+  if (v >= 75) return 'bg-code8-green/10 text-code8-green border-code8-green' + dim;
+  if (v >= 25) return 'bg-code8-amber/10 text-yellow-600 border-code8-amber' + dim;
+  return 'bg-code8-red/10 text-code8-red border-code8-red' + dim;
+};
+const rankLabel = (rank: any) => {
+  const v = rankPct(rank);
+  if (v == null) return '';
+  const n = rankN(rank);
+  const nLabel = n != null && n < 10 ? ` (n=${n})` : '';
+  return `${Math.round(v)}th Pct${nLabel}`;
 };
 
 // Valor Specific Score Coloring
@@ -219,6 +294,25 @@ const formatDate = (timestamp: any) => {
         </button>
       </div>
     </div>
+
+    <!-- Cohort selector -->
+    <div v-if="store.selectedAthlete" class="flex items-center gap-2 mb-4">
+      <label class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Compare against:</label>
+      <select :value="cohortValueString" @change="handleCohortChange" class="text-sm bg-white border border-gray-300 rounded-md px-3 py-1 focus:outline-none focus:ring-1 focus:ring-code8-gold focus:border-code8-gold">
+        <option value="combine">Combine Athletes (All)</option>
+        <option value="elite">Elite Benchmarks</option>
+        <optgroup label="Same Sport" v-if="store.selectedAthlete?.SportsTags?.length">
+          <option v-for="t in store.selectedAthlete.SportsTags" :key="'cs-'+t" :value="`sport:${t}`">Sport: {{ t }}</option>
+        </optgroup>
+        <optgroup label="Same Position" v-if="store.selectedAthlete?.PositionsTags?.length">
+          <option v-for="t in store.selectedAthlete.PositionsTags" :key="'cp-'+t" :value="`position:${t}`">Position: {{ t }}</option>
+        </optgroup>
+        <optgroup label="Same Age Group" v-if="ageBucketOf(store.selectedAthlete?.BirthDate)">
+          <option :value="`age:${ageBucketOf(store.selectedAthlete?.BirthDate)}`">Age {{ ageBucketOf(store.selectedAthlete?.BirthDate) }}</option>
+        </optgroup>
+      </select>
+      <span v-if="store.metricsLoading" class="text-xs text-gray-400 animate-pulse">Loading...</span>
+    </div>
     
     <!-- Empty State -->
     <div v-if="!store.selectedAthlete" class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center justify-center h-64 text-center">
@@ -257,7 +351,7 @@ const formatDate = (timestamp: any) => {
             <div class="border border-gray-200 rounded-lg overflow-hidden">
               <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
                 <span class="font-semibold text-sm text-gray-700">Sprint 40</span>
-                <span :class="getRankClass(store.metrics?.ranks?.sprint40)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ store.metrics?.ranks?.sprint40 }}th Pct</span>
+                <span :class="getRankClass(store.metrics?.ranks?.sprint40)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ rankLabel(store.metrics?.ranks?.sprint40) }}</span>
               </div>
               <div class="p-4" v-if="processedSprints.length === 0"><p class="text-sm text-gray-500 italic">No data available.</p></div>
               <table class="w-full text-sm text-left text-gray-600" v-else>
@@ -282,7 +376,7 @@ const formatDate = (timestamp: any) => {
             <div class="border border-gray-200 rounded-lg overflow-hidden">
               <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
                 <span class="font-semibold text-sm text-gray-700">Pro Agility (5-10-5)</span>
-                <span :class="getRankClass(store.metrics?.ranks?.proAgility)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ store.metrics?.ranks?.proAgility }}th Pct</span>
+                <span :class="getRankClass(store.metrics?.ranks?.proAgility)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ rankLabel(store.metrics?.ranks?.proAgility) }}</span>
               </div>
               <div class="p-4" v-if="processedAgility.length === 0"><p class="text-sm text-gray-500 italic">No data available.</p></div>
               <table class="w-full text-sm text-left text-gray-600" v-else>
@@ -311,16 +405,21 @@ const formatDate = (timestamp: any) => {
             <div class="border border-gray-200 rounded-lg overflow-hidden flex flex-col">
               <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
                 <span class="font-semibold text-sm text-gray-700">Standing Vertical</span>
-                <span :class="getRankClass(store.metrics?.ranks?.verticalJump)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ store.metrics?.ranks?.verticalJump }}th Pct</span>
+                <span :class="getRankClass(store.metrics?.ranks?.verticalJump)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ rankLabel(store.metrics?.ranks?.verticalJump) }}</span>
               </div>
-              <div class="p-4 flex-1 flex items-center justify-center" v-if="vertData.length === 0"><p class="text-sm text-gray-500 italic">No data available.</p></div>
+              <div class="p-4 flex-1 flex items-center justify-center" v-if="!bestVertDoc"><p class="text-sm text-gray-500 italic">No data available.</p></div>
               <div class="flex-1 flex flex-col items-center justify-center p-6 bg-white" v-else>
                 <div class="flex items-baseline">
-                  <span class="text-4xl font-black text-gray-900">{{ vertData[0].VerticalJump || '--' }}</span>
+                  <span class="text-4xl font-black text-gray-900">{{ bestVertDoc.VertInches ?? bestVertDoc.VerticalJump ?? '--' }}</span>
                   <span class="text-gray-400 ml-1 font-medium pb-1">in</span>
                 </div>
                 <div class="text-xs text-gray-400 mt-2 font-medium">
-                  T1: {{ vertData[0].JumpHeight_1 || '-' }}" &bull; T2: {{ vertData[0].JumpHeight_2 || '-' }}" &bull; T3: {{ vertData[0].JumpHeight_3 || '-' }}"
+                  <template v-if="bestVertDoc.MaxTouchInches">
+                    Max touch: {{ bestVertDoc.MaxTouchInches }}" &bull; Reach: {{ bestVertDoc.StandingReachInches }}"
+                  </template>
+                  <template v-else>
+                    T1: {{ bestVertDoc.JumpHeight_1 || '-' }}" &bull; T2: {{ bestVertDoc.JumpHeight_2 || '-' }}" &bull; T3: {{ bestVertDoc.JumpHeight_3 || '-' }}"
+                  </template>
                 </div>
               </div>
             </div>
@@ -329,16 +428,16 @@ const formatDate = (timestamp: any) => {
             <div class="border border-gray-200 rounded-lg overflow-hidden flex flex-col">
               <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
                 <span class="font-semibold text-sm text-gray-700">Broad Jump</span>
-                <span :class="getRankClass(store.metrics?.ranks?.broadJump)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ store.metrics?.ranks?.broadJump }}th Pct</span>
+                <span :class="getRankClass(store.metrics?.ranks?.broadJump)" class="text-[10px] px-2 py-0.5 rounded border font-bold">{{ rankLabel(store.metrics?.ranks?.broadJump) }}</span>
               </div>
-              <div class="p-4 flex-1 flex items-center justify-center" v-if="broadData.length === 0"><p class="text-sm text-gray-500 italic">No data available.</p></div>
+              <div class="p-4 flex-1 flex items-center justify-center" v-if="!bestBroadDoc"><p class="text-sm text-gray-500 italic">No data available.</p></div>
               <div class="flex-1 flex flex-col items-center justify-center p-6 bg-white" v-else>
                 <div class="flex items-baseline">
-                  <span class="text-4xl font-black text-gray-900">{{ broadData[0].BestBroadJump || '--' }}</span>
+                  <span class="text-4xl font-black text-gray-900">{{ bestBroadDoc.BestInches ?? bestBroadDoc.BestBroadJump ?? '--' }}</span>
                   <span class="text-gray-400 ml-1 font-medium pb-1">in</span>
                 </div>
                 <div class="text-xs text-gray-400 mt-2 font-medium">
-                  T1: {{ broadData[0].BroadJump_1 || '-' }}" &bull; T2: {{ broadData[0].BroadJump_2 || '-' }}"
+                  T1: {{ bestBroadDoc.Attempt1Inches ?? bestBroadDoc.BroadJump_1 ?? '-' }}" &bull; T2: {{ bestBroadDoc.Attempt2Inches ?? bestBroadDoc.BroadJump_2 ?? '-' }}"
                 </div>
               </div>
             </div>
@@ -367,7 +466,7 @@ const formatDate = (timestamp: any) => {
             <div class="border border-gray-200 rounded-lg overflow-hidden md:col-span-2">
               <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
                 <span class="font-semibold text-sm text-gray-700">Force Plate: Countermovement Jump (CMJ)</span>
-                <span :class="getRankClass(store.metrics?.ranks?.fp_jump_height)" class="text-[10px] px-2 py-0.5 rounded border font-bold">Elite Rank (Jump Ht): {{ store.metrics?.ranks?.fp_jump_height }}th Pct</span>
+                <span :class="getRankClass(store.metrics?.ranks?.fp_jump_height)" class="text-[10px] px-2 py-0.5 rounded border font-bold">Jump Ht: {{ rankLabel(store.metrics?.ranks?.fp_jump_height) }}</span>
               </div>
               <div class="p-4" v-if="fpCmjData.length === 0"><p class="text-sm text-gray-500 italic">No CMJ data available.</p></div>
               <table class="w-full text-sm text-left text-gray-600" v-else>
@@ -392,27 +491,31 @@ const formatDate = (timestamp: any) => {
               </table>
             </div>
 
-            <!-- Force Plate MR Table -->
+            <!-- Force Plate CMJ Rebound Table -->
             <div class="border border-gray-200 rounded-lg overflow-hidden md:col-span-2">
-              <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 font-semibold text-sm text-gray-700">Force Plate: Multi-Rebound (MR)</div>
-              <div class="p-4" v-if="fpMrData.length === 0"><p class="text-sm text-gray-500 italic">No MR data available.</p></div>
+              <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex flex-wrap items-center gap-2">
+                <span class="font-semibold text-sm text-gray-700">Force Plate: CMJ Rebound</span>
+                <span :class="getRankClass(store.metrics?.ranks?.cmj_rebound_jump_height)" class="text-[10px] px-2 py-0.5 rounded border font-bold">Jump Ht: {{ rankLabel(store.metrics?.ranks?.cmj_rebound_jump_height) }}</span>
+                <span :class="getRankClass(store.metrics?.ranks?.cmj_rebound_rsi)" class="text-[10px] px-2 py-0.5 rounded border font-bold">RSI: {{ rankLabel(store.metrics?.ranks?.cmj_rebound_rsi) }}</span>
+                <span :class="getRankClass(store.metrics?.ranks?.cmj_rebound_stiffness)" class="text-[10px] px-2 py-0.5 rounded border font-bold">Stiffness: {{ rankLabel(store.metrics?.ranks?.cmj_rebound_stiffness) }}</span>
+                <span :class="getRankClass(store.metrics?.ranks?.cmj_rebound_jump_height_ratio)" class="text-[10px] px-2 py-0.5 rounded border font-bold">Ht Ratio: {{ rankLabel(store.metrics?.ranks?.cmj_rebound_jump_height_ratio) }}</span>
+              </div>
+              <div class="p-4" v-if="fpCmjReboundData.length === 0"><p class="text-sm text-gray-500 italic">No CMJ Rebound data available.</p></div>
               <table class="w-full text-sm text-left text-gray-600" v-else>
                 <thead class="text-xs text-gray-400 uppercase bg-white border-b border-gray-100">
                   <tr>
-                    <th class="px-4 py-2 font-medium">Jumps</th>
-                    <th class="px-4 py-2 font-medium">Avg Jump Height</th>
-                    <th class="px-4 py-2 font-medium">Peak Jump Height</th>
-                    <th class="px-4 py-2 font-medium">Avg RSI</th>
-                    <th class="px-4 py-2 font-medium">Peak RSI</th>
+                    <th class="px-4 py-2 font-medium">Rebound Jump Height</th>
+                    <th class="px-4 py-2 font-medium">Rebound RSI</th>
+                    <th class="px-4 py-2 font-medium">Rebound Stiffness</th>
+                    <th class="px-4 py-2 font-medium">Jump Height Ratio</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(row, idx) in fpMrData" :key="'mr-'+idx" class="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
-                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Number of Jumps'] || '--' }}</td>
-                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Avg Jump Height (in)'] ? Number(row['Avg Jump Height (in)']).toFixed(2) + '"' : '--' }}</td>
-                    <td class="px-4 py-2 font-mono text-gray-900 font-bold">{{ row['Peak Jump Height (in)'] ? Number(row['Peak Jump Height (in)']).toFixed(2) + '"' : '--' }}</td>
-                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Avg RSI'] ? Number(row['Avg RSI']).toFixed(2) : '--' }}</td>
-                    <td class="px-4 py-2 font-mono text-gray-900 font-bold">{{ row['Peak RSI'] ? Number(row['Peak RSI']).toFixed(2) : '--' }}</td>
+                  <tr v-for="(row, idx) in fpCmjReboundData" :key="'cmjr-'+idx" class="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
+                    <td class="px-4 py-2 font-mono text-gray-900 font-bold">{{ row['Rebound Jump Height (in)'] ? Number(row['Rebound Jump Height (in)']).toFixed(2) + '"' : '--' }}</td>
+                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Rebound RSI'] != null ? Number(row['Rebound RSI']).toFixed(2) : '--' }}</td>
+                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Rebound Stiffness'] != null ? Number(row['Rebound Stiffness']).toFixed(2) : '--' }}</td>
+                    <td class="px-4 py-2 font-mono text-gray-900 font-bold">{{ row['Jump Height Ratio'] != null ? Number(row['Jump Height Ratio']).toFixed(2) : '--' }}</td>
                   </tr>
                 </tbody>
               </table>
