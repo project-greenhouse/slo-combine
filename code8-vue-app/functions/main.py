@@ -348,39 +348,27 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
 
             cmj_reb_rows = _filter_for_athlete(hd_cache["CMJ_REBOUND"]) if hd_cache["CMJ_REBOUND"] else []
             if cmj_reb_rows:
-                # Best CMJ jump height (across all CMJ tests for this athlete) for the ratio
-                best_cmj_jump_m = 0.0
-                for r in (cmj_rows or []):
-                    v = r.get("jump_height_m")
-                    if v is not None and v > best_cmj_jump_m:
-                        best_cmj_jump_m = float(v)
-
-                # Helper to read rebound metric values; HD field names may vary so try several
-                def _rebound_field(r, *names):
-                    for n in names:
-                        v = r.get(n)
-                        if v is not None:
-                            return v
-                    return None
-
                 metrics["force_plate_cmj_rebound"] = []
                 for r in cmj_reb_rows:
-                    rebound_jh_m = _rebound_field(r, "rebound_jump_height_m", "reboundJumpHeight_m", "rebound_jump_height")
-                    rebound_rsi = _rebound_field(r, "rebound_rsi", "reboundRsi", "rebound_modified_rsi", "rebound_mrsi")
-                    rebound_stiffness = _rebound_field(r, "rebound_stiffness_n_m", "reboundStiffness", "rebound_stiffness", "stiffness_n_m")
-                    # Per-test ratio: prefer the CMJ portion within this test if available, else fall back to best CMJ
-                    test_cmj_jh_m = _rebound_field(r, "cmj_jump_height_m", "jump_height_m") or best_cmj_jump_m
+                    # Field names after hawkin_client.normalize_metric_key():
+                    #   "Rebound Jump Height(m)" → rebound_jump_height_m
+                    #   "Rebound RSI" → rebound_rsi
+                    #   "Rebound Stiffness(N/m)" → rebound_stiffness_n_m
+                    #   "CMJ Jump Height(m)" → cmj_jump_height_m
+                    rebound_jh_m = r.get("rebound_jump_height_m")
+                    cmj_jh_m = r.get("cmj_jump_height_m")
+                    # Jump Height Ratio = CMJ / Rebound
                     ratio = None
-                    try:
-                        if rebound_jh_m and test_cmj_jh_m:
-                            ratio = round(float(rebound_jh_m) / float(test_cmj_jh_m), 3)
-                    except Exception:
-                        ratio = None
+                    if rebound_jh_m and cmj_jh_m:
+                        try:
+                            ratio = round(float(cmj_jh_m) / float(rebound_jh_m), 3)
+                        except Exception:
+                            ratio = None
 
                     metrics["force_plate_cmj_rebound"].append({
                         "Rebound Jump Height (in)": (float(rebound_jh_m) * 39.3701) if rebound_jh_m is not None else None,
-                        "Rebound RSI": rebound_rsi,
-                        "Rebound Stiffness": rebound_stiffness,
+                        "Rebound RSI": r.get("rebound_rsi"),
+                        "Rebound Stiffness": r.get("rebound_stiffness_n_m"),
                         "Jump Height Ratio": ratio,
                     })
 
