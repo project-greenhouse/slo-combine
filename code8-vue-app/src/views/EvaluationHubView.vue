@@ -41,7 +41,7 @@ const bestBroadDoc = computed(() => {
   return best;
 });
 const fpCmjData = computed(() => store.metrics?.force_plate_cmj || []);
-const fpMrData = computed(() => store.metrics?.force_plate_mr || []);
+const fpCmjReboundData = computed(() => store.metrics?.force_plate_cmj_rebound || []);
 
 // Process Sprint Data: Group by ActivityIdentifier to form discrete trials
 const processedSprints = computed(() => {
@@ -417,27 +417,25 @@ const formatDate = (timestamp: any) => {
               </table>
             </div>
 
-            <!-- Force Plate MR Table -->
+            <!-- Force Plate CMJ Rebound Table -->
             <div class="border border-gray-200 rounded-lg overflow-hidden md:col-span-2">
-              <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 font-semibold text-sm text-gray-700">Force Plate: Multi-Rebound (MR)</div>
-              <div class="p-4" v-if="fpMrData.length === 0"><p class="text-sm text-gray-500 italic">No MR data available.</p></div>
+              <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 font-semibold text-sm text-gray-700">Force Plate: CMJ Rebound</div>
+              <div class="p-4" v-if="fpCmjReboundData.length === 0"><p class="text-sm text-gray-500 italic">No CMJ Rebound data available.</p></div>
               <table class="w-full text-sm text-left text-gray-600" v-else>
                 <thead class="text-xs text-gray-400 uppercase bg-white border-b border-gray-100">
                   <tr>
-                    <th class="px-4 py-2 font-medium">Jumps</th>
-                    <th class="px-4 py-2 font-medium">Avg Jump Height</th>
-                    <th class="px-4 py-2 font-medium">Peak Jump Height</th>
-                    <th class="px-4 py-2 font-medium">Avg RSI</th>
-                    <th class="px-4 py-2 font-medium">Peak RSI</th>
+                    <th class="px-4 py-2 font-medium">Rebound Jump Height</th>
+                    <th class="px-4 py-2 font-medium">Rebound RSI</th>
+                    <th class="px-4 py-2 font-medium">Rebound Stiffness</th>
+                    <th class="px-4 py-2 font-medium">Jump Height Ratio</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(row, idx) in fpMrData" :key="'mr-'+idx" class="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
-                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Number of Jumps'] || '--' }}</td>
-                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Avg Jump Height (in)'] ? Number(row['Avg Jump Height (in)']).toFixed(2) + '"' : '--' }}</td>
-                    <td class="px-4 py-2 font-mono text-gray-900 font-bold">{{ row['Peak Jump Height (in)'] ? Number(row['Peak Jump Height (in)']).toFixed(2) + '"' : '--' }}</td>
-                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Avg RSI'] ? Number(row['Avg RSI']).toFixed(2) : '--' }}</td>
-                    <td class="px-4 py-2 font-mono text-gray-900 font-bold">{{ row['Peak RSI'] ? Number(row['Peak RSI']).toFixed(2) : '--' }}</td>
+                  <tr v-for="(row, idx) in fpCmjReboundData" :key="'cmjr-'+idx" class="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
+                    <td class="px-4 py-2 font-mono text-gray-900 font-bold">{{ row['Rebound Jump Height (in)'] ? Number(row['Rebound Jump Height (in)']).toFixed(2) + '"' : '--' }}</td>
+                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Rebound RSI'] != null ? Number(row['Rebound RSI']).toFixed(2) : '--' }}</td>
+                    <td class="px-4 py-2 font-mono text-gray-900">{{ row['Rebound Stiffness'] != null ? Number(row['Rebound Stiffness']).toFixed(2) : '--' }}</td>
+                    <td class="px-4 py-2 font-mono text-gray-900 font-bold">{{ row['Jump Height Ratio'] != null ? Number(row['Jump Height Ratio']).toFixed(2) : '--' }}</td>
                   </tr>
                 </tbody>
               </table>

@@ -28,7 +28,7 @@ def _hd_client() -> HawkinClient:
 # Cache for HD tests to make rapid clicking in the UI instantaneous
 hd_cache = {
     "CMJ": None,
-    "MR": None
+    "CMJ_REBOUND": None,
 }
 
 valor_cache = {
@@ -340,21 +340,49 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                     "Braking Asymmetry": round(r["lr_braking_impulse_index"]) if r.get("lr_braking_impulse_index") is not None else None,
                 } for r in cmj_rows]
 
-            # Multi-Rebound — cache only when we successfully resolved a type ID
-            if hd_cache["MR"] is None:
-                mr_type_id = client.find_test_type_id("MR")
-                if mr_type_id:
-                    hd_cache["MR"] = client.get_tests(test_type_id=mr_type_id, from_ts=from_ts, to_ts=to_ts)
+            # CMJ Rebound — cache only when we successfully resolved a type ID
+            if hd_cache["CMJ_REBOUND"] is None:
+                cmj_reb_id = client.find_test_type_id("CMJREB")
+                if cmj_reb_id:
+                    hd_cache["CMJ_REBOUND"] = client.get_tests(test_type_id=cmj_reb_id, from_ts=from_ts, to_ts=to_ts)
 
-            mr_rows = _filter_for_athlete(hd_cache["MR"]) if hd_cache["MR"] else []
-            if mr_rows:
-                metrics["force_plate_mr"] = [{
-                    "Number of Jumps": r.get("number_of_jumps_count"),
-                    "Avg Jump Height (in)": (r["avg_jump_height_m"] * 39.3701) if r.get("avg_jump_height_m") is not None else None,
-                    "Peak Jump Height (in)": (r["peak_jump_height_m"] * 39.3701) if r.get("peak_jump_height_m") is not None else None,
-                    "Avg RSI": r.get("avg_rsi"),
-                    "Peak RSI": r.get("peak_rsi"),
-                } for r in mr_rows]
+            cmj_reb_rows = _filter_for_athlete(hd_cache["CMJ_REBOUND"]) if hd_cache["CMJ_REBOUND"] else []
+            if cmj_reb_rows:
+                # Best CMJ jump height (across all CMJ tests for this athlete) for the ratio
+                best_cmj_jump_m = 0.0
+                for r in (cmj_rows or []):
+                    v = r.get("jump_height_m")
+                    if v is not None and v > best_cmj_jump_m:
+                        best_cmj_jump_m = float(v)
+
+                # Helper to read rebound metric values; HD field names may vary so try several
+                def _rebound_field(r, *names):
+                    for n in names:
+                        v = r.get(n)
+                        if v is not None:
+                            return v
+                    return None
+
+                metrics["force_plate_cmj_rebound"] = []
+                for r in cmj_reb_rows:
+                    rebound_jh_m = _rebound_field(r, "rebound_jump_height_m", "reboundJumpHeight_m", "rebound_jump_height")
+                    rebound_rsi = _rebound_field(r, "rebound_rsi", "reboundRsi", "rebound_modified_rsi", "rebound_mrsi")
+                    rebound_stiffness = _rebound_field(r, "rebound_stiffness_n_m", "reboundStiffness", "rebound_stiffness", "stiffness_n_m")
+                    # Per-test ratio: prefer the CMJ portion within this test if available, else fall back to best CMJ
+                    test_cmj_jh_m = _rebound_field(r, "cmj_jump_height_m", "jump_height_m") or best_cmj_jump_m
+                    ratio = None
+                    try:
+                        if rebound_jh_m and test_cmj_jh_m:
+                            ratio = round(float(rebound_jh_m) / float(test_cmj_jh_m), 3)
+                    except Exception:
+                        ratio = None
+
+                    metrics["force_plate_cmj_rebound"].append({
+                        "Rebound Jump Height (in)": (float(rebound_jh_m) * 39.3701) if rebound_jh_m is not None else None,
+                        "Rebound RSI": rebound_rsi,
+                        "Rebound Stiffness": rebound_stiffness,
+                        "Jump Height Ratio": ratio,
+                    })
 
             # Debug info to help diagnose missing data per athlete
             metrics["_hd_debug"] = {
@@ -362,8 +390,9 @@ def get_athlete_metrics(req: https_fn.CallableRequest) -> any:
                 "athlete_name_query": athlete_name,
                 "cmj_total_in_window": len(hd_cache["CMJ"] or []),
                 "cmj_matched_for_athlete": len(cmj_rows) if hd_cache["CMJ"] else None,
-                "mr_total_in_window": len(hd_cache["MR"] or []),
-                "mr_matched_for_athlete": len(mr_rows) if hd_cache["MR"] else None,
+                "cmj_rebound_total_in_window": len(hd_cache["CMJ_REBOUND"] or []),
+                "cmj_rebound_matched_for_athlete": len(cmj_reb_rows) if hd_cache["CMJ_REBOUND"] else None,
+                "cmj_rebound_sample_keys": list(cmj_reb_rows[0].keys()) if cmj_reb_rows else None,
             }
     except Exception as e:
         print(f"Error fetching HD metrics: {e}")
@@ -1331,11 +1360,11 @@ def check_hd_connection(req: https_fn.CallableRequest) -> any:
             "names_and_canonical": [{"name": t.get("name"), "canonicalId": t.get("canonicalId"), "id": t.get("id")} for t in types[:20]],
         })
         cmj_id = client.find_test_type_id("CMJ")
-        mr_id = client.find_test_type_id("MR")
+        cmj_reb_id = client.find_test_type_id("CMJREB")
         result["steps"].append({
             "step": "Test type matching",
             "CMJ_resolved_id": cmj_id,
-            "MR_resolved_id": mr_id,
+            "CMJ_Rebound_resolved_id": cmj_reb_id,
         })
     except Exception as e:
         return {"status": "error", "message": f"Test types fetch failed: {e}", "steps": result["steps"]}
@@ -1360,17 +1389,20 @@ def check_hd_connection(req: https_fn.CallableRequest) -> any:
         else:
             result["steps"].append({"step": "CMJ tests", "skipped": "no test type ID resolved"})
 
-        if mr_id:
-            mr_tests = client.get_tests(test_type_id=mr_id, from_ts=from_ts, to_ts=to_ts)
+        if cmj_reb_id:
+            cmj_reb_tests = client.get_tests(test_type_id=cmj_reb_id, from_ts=from_ts, to_ts=to_ts)
+            sample = cmj_reb_tests[0] if cmj_reb_tests else None
+            # Surface the field names that look rebound-related so we can wire correct keys
+            rebound_field_candidates = [k for k in (sample.keys() if sample else []) if "rebound" in k.lower() or "stiffness" in k.lower() or "rsi" in k.lower() or "jump_height" in k.lower()]
             result["steps"].append({
-                "step": "MR tests with testTypeId filter",
-                "count": len(mr_tests),
-                "sample_keys": list(mr_tests[0].keys()) if mr_tests else None,
-                "sample_metric_field_names": [k for k in (mr_tests[0].keys() if mr_tests else []) if k.startswith(("avg", "peak", "rsi", "mrsi", "jump", "number"))],
-                "sample_athlete": {"id": mr_tests[0].get("athlete_id"), "name": mr_tests[0].get("athlete_name")} if mr_tests else None,
+                "step": "CMJ Rebound tests with testTypeId filter",
+                "count": len(cmj_reb_tests),
+                "sample_keys": list(sample.keys()) if sample else None,
+                "rebound_related_fields": rebound_field_candidates,
+                "sample_athlete": {"id": sample.get("athlete_id"), "name": sample.get("athlete_name")} if sample else None,
             })
         else:
-            result["steps"].append({"step": "MR tests", "skipped": "no test type ID resolved"})
+            result["steps"].append({"step": "CMJ Rebound tests", "skipped": "no test type ID resolved"})
 
         # Also try without filter, group counts by test_type_name
         all_tests = client.get_tests(from_ts=from_ts, to_ts=to_ts)

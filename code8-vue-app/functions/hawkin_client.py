@@ -180,6 +180,7 @@ class HawkinClient:
         """
         ALIASES = {
             "CMJ": ["countermovement jump", "counter movement jump", "cmj"],
+            "CMJREB": ["cmj rebound", "countermovement rebound", "cmjr"],
             "MR": ["multi rebound", "multi-rebound", "multirebound", "mr"],
             "SJ": ["squat jump", "sj"],
             "DJ": ["drop jump", "dj"],
@@ -203,11 +204,17 @@ class HawkinClient:
                 if t.get("canonicalId") == canonical:
                     return t["id"]
 
-        # 2. Try normalized name match
+        # 2. Try exact normalized name match (prefer specificity)
         normalized_candidates = [normalize(c) for c in candidates]
         for t in types:
             n = normalize(t.get("name"))
-            if n in normalized_candidates or any(c in n for c in normalized_candidates):
+            if n in normalized_candidates:
+                return t["id"]
+
+        # 3. Fall back to substring match (last resort — order in HD's list matters here)
+        for t in types:
+            n = normalize(t.get("name"))
+            if any(c in n for c in normalized_candidates):
                 return t["id"]
 
         return None
